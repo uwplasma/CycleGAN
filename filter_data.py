@@ -1,19 +1,19 @@
-iimport argparse
+import argparse
 import pandas as pd
 
 def main(args):
-    # Read input files
+    
     data = pd.read_csv(args.input_data)
     good_data = pd.read_csv(args.good_data)
 
-    # Find rows in 'data' that are not in 'good_data'
+    
     merged = pd.merge(data, good_data, on=data.columns.tolist(), how='left', indicator=True)
     diff_df = merged[merged['_merge'] == 'left_only'].drop(columns=['_merge'])
 
-    # Randomly sample 'n' rows from the difference
+    
     bad_stels = diff_df.sample(n=args.n, random_state=42)
 
-    # Save the result
+    
     bad_stels.to_csv(args.output_path, index=False)
     print(f"Saved {args.n} sampled bad configurations to: {args.output_path}")
 

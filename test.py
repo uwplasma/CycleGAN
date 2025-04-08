@@ -4,27 +4,25 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
-from model import Generator  # Your Generator model definition
+from model import Generator  
 from qsc import Qsc
 from qsc.util import mu0, fourier_minimum, to_Fourier
 
-# Define functions for standardization and inverse standardization
 def standardize(X, mean, std):
     return (X - mean) / std
 
 def inverse_standardize(X_scaled, mean, std):
     return X_scaled * std + mean
 
-# Function to perform filtering on generated data using Qsc evaluation
 def filter_generated_data(generated_csv, basic_out_csv, fourier_out_csv):
     generated_df = pd.read_csv(generated_csv)
-    basic_valid = pd.DataFrame()         # Rows that meet the basic criteria
-    valid_with_fourier = pd.DataFrame()    # Rows that also meet the additional Fourier criteria
+    basic_valid = pd.DataFrame()         
+    valid_with_fourier = pd.DataFrame()    
 
-    # Iterate through each generated row
+    
     for index, row in generated_df.iterrows():
         try:
-            # Extract parameters from the row (assumes same column names as in training)
+            
             rc_values = [row['rc1'], row['rc2'], row['rc3']]
             zs_values = [row['zs1'], row['zs2'], row['zs3']]
             nfp_value = row['nfp']
@@ -32,7 +30,7 @@ def filter_generated_data(generated_csv, basic_out_csv, fourier_out_csv):
             B2c_value = row['B2c']
             p2_value = row['p2']
 
-            # Create a Qsc object with order 'r2' and an example nphi for evaluation
+            
             stel = Qsc(
                 rc=[1.0] + rc_values,
                 zs=[0.0] + zs_values,
@@ -44,7 +42,7 @@ def filter_generated_data(generated_csv, basic_out_csv, fourier_out_csv):
                 nphi=51
             )
 
-            # Compute metrics from the Qsc evaluation
+            
             axis_length    = stel.axis_length
             iota           = stel.iota
             max_elongation = stel.max_elongation
@@ -56,7 +54,7 @@ def filter_generated_data(generated_csv, basic_out_csv, fourier_out_csv):
             beta           = -mu0 * p2_value * (stel.r_singularity ** 2) / (stel.B0 ** 2)
             DMerc_times_r2 = stel.DMerc_times_r2
 
-            # Basic filtering conditions:
+            
             basic_condition = (
                 axis_length > 0 and
                 abs(iota) >= 0.2 and
@@ -73,74 +71,68 @@ def filter_generated_data(generated_csv, basic_out_csv, fourier_out_csv):
             if basic_condition:
                 basic_valid = pd.concat([basic_valid, pd.DataFrame([row])], ignore_index=True)
                 
-                # Additional Fourier-based filtering: Try to compute Fourier coefficients
+                
                 try:
                     R_2D, Z_2D, _ = stel.Frenet_to_cylindrical(r=0.1, ntheta=20)
                     RBC, RBS, ZBC, ZBS = to_Fourier(R_2D, Z_2D, stel.nfp, mpol=13, ntor=25, lasym=stel.lasym)
                     valid_with_fourier = pd.concat([valid_with_fourier, pd.DataFrame([row])], ignore_index=True)
                 except Exception as e:
-                    # If Fourier conversion fails, skip this row for the Fourier criteria
+                    
                     pass
 
         except Exception as e:
             print(f"Row {index} raised an error: {e}")
 
-    # Save the filtered data
+    
     basic_valid.to_csv(basic_out_csv, index=False)
     valid_with_fourier.to_csv(fourier_out_csv, index=False)
     print(f"Saved basic valid data to {basic_out_csv}")
     print(f"Saved Fourier valid data to {fourier_out_csv}")
 
 def main(args):
-    # ---------------------------
-    # Generation Phase
-    # ---------------------------
-    # Load input CSV file containing data in the same format as training (e.g., "new_data.csv")
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     new_data = pd.read_csv(args.input_csv)
-    # Assume the first 10 columns are the input features
+    
     X_new = new_data.iloc[:, :10].values
 
-    # Load scaler parameters computed from training
+    
     scaler_X_mean = np.load('scaler_X_mean.npy')
     scaler_X_std  = np.load('scaler_X_std.npy')
     scaler_Y_mean = np.load('scaler_Y_mean.npy')
     scaler_Y_std  = np.load('scaler_Y_std.npy')
 
-    # Standardize the new data using training input scalers
+    
     X_new_scaled = standardize(X_new, scaler_X_mean, scaler_X_std)
 
-    # Convert to PyTorch tensor
+    
     X_new_tensor = torch.tensor(X_new_scaled, dtype=torch.float32).to(device)
 
-    # Load the trained generator model
+    
     input_dim = 10
     output_dim = 10
     G_A2B = Generator(input_dim, output_dim).to(device)
     G_A2B.load_state_dict(torch.load(args.model_path, map_location=device, weights_only=True))
     G_A2B.eval()
 
-    # Generate new data
+    
     with torch.no_grad():
         generated_output = G_A2B(X_new_tensor).cpu().numpy()
 
-    # Inverse transform the generated output using training target scalers
+    
     generated_output_inversed = inverse_standardize(generated_output, scaler_Y_mean, scaler_Y_std)
 
-    # Save generated output to CSV with the same column names as the input CSV
+    
     generated_df = pd.DataFrame(generated_output_inversed, columns=new_data.columns[:10])
 
     if 'nfp' in generated_df.columns:
         generated_df['nfp'] = generated_df['nfp'].astype(int)
 
-    # Save the generated DataFrame
+    
     generated_df.to_csv(args.generated_csv, index=False)
 
     print(f"Generated data saved to {args.generated_csv}")
 
-    # ---------------------------
-    # Filtering Phase (optional)
-    # ---------------------------
     if args.filter:
         filter_generated_data(args.generated_csv, args.basic_out_csv, args.fourier_out_csv)
 

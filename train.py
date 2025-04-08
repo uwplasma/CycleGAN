@@ -11,38 +11,33 @@ from tqdm import tqdm
 from collections import deque
 from model import Generator, Discriminator
 
-# ---------------------------
-# Data Loading and Preprocessing
-# ---------------------------
-# Read CSV files for the original and target data
+
 original_data = pd.read_csv('bad_stels.csv')
 target_data = pd.read_csv('XGStels.csv')
 
-# Use the first 10 columns of each dataset
+
 X = original_data.iloc[:, :10].values
 Y = target_data.iloc[:, :10].values
 
-# Standardize the data
+
 scaler_X = StandardScaler()
 scaler_Y = StandardScaler()
 X = scaler_X.fit_transform(X)
 Y = scaler_Y.fit_transform(Y)
 
-# Split the data into training (85%) and evaluation (15%) sets
+
 X_train, X_eval, Y_train, Y_eval = train_test_split(X, Y, test_size=0.15, random_state=42)
 
-# Convert training data to PyTorch tensors
+
 X_train = torch.tensor(X_train, dtype=torch.float32)
 Y_train = torch.tensor(Y_train, dtype=torch.float32)
-# X_eval remains a NumPy array for evaluation conversion later
+
 
 batch_size = 1024
 train_dataset = TensorDataset(X_train, Y_train)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-# ---------------------------
-# Model Definition and Initialization
-# ---------------------------
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 input_dim = 10
@@ -52,53 +47,46 @@ G_B2A = Generator(output_dim, input_dim).to(device)
 D_A = Discriminator(input_dim).to(device)
 D_B = Discriminator(output_dim).to(device)
 
-# Loss functions
-adversarial_loss = nn.MSELoss()  # L2 loss for adversarial loss
-cycle_loss = nn.L1Loss()         # L1 loss for cycle consistency
 
-# Optimizers for generators and discriminators
+adversarial_loss = nn.MSELoss()  
+cycle_loss = nn.L1Loss()         
+
+
 optimizer_G = optim.Adam(list(G_A2B.parameters()) + list(G_B2A.parameters()), lr=0.0001, betas=(0.5, 0.999))
 optimizer_D_A = optim.Adam(D_A.parameters(), lr=0.0001, betas=(0.5, 0.999))
 optimizer_D_B = optim.Adam(D_B.parameters(), lr=0.0001, betas=(0.5, 0.999))
 
-# Buffers to store fake data samples (if needed)
+
 fake_A_buffer = deque(maxlen=50)
 fake_B_buffer = deque(maxlen=50)
 
-# ---------------------------
-# Training and Evaluation Settings
-# ---------------------------
+
 epoch = 0
-eval_interval = 10000 # Evaluate every 10,000 epochs
-patience = 10          # Stop training if no improvement for 10 evaluations
+eval_interval = 10000 
+patience = 10          
 no_improve_count = 0
 best_basic_ratio = 0.0
 best_fourier_ratio = 0.0
 best_generator_state = None
 
-# Lists to record evaluation metrics over epochs
+
 eval_steps = []
 basic_ratio_list = []
 fourier_ratio_list = []
 
-# ---------------------------
-# Start Infinite Training Loop
-# ---------------------------
+
 while True:
     epoch += 1
     G_A2B.train(); G_B2A.train(); D_A.train(); D_B.train()
     num_batches = 0
 
-    # Iterate over training batches
     for real_A, real_B in tqdm(train_loader, desc=f"Epoch {epoch}", leave=False):
         real_A, real_B = real_A.to(device), real_B.to(device)
         current_batch_size = real_A.size(0)
         valid = torch.ones((current_batch_size, 1), device=device)
         fake_label = torch.zeros((current_batch_size, 1), device=device)
         
-        # ---------------------------
-        # Train Generators
-        # ---------------------------
+        
         optimizer_G.zero_grad()
         loss_id_A = cycle_loss(G_B2A(real_A), real_A)
         loss_id_B = cycle_loss(G_A2B(real_B), real_B)
@@ -117,11 +105,9 @@ while True:
         fake_A_buffer.append(fake_A.detach().cpu())
         fake_B_buffer.append(fake_B.detach().cpu())
         
-        # ---------------------------
-        # Train Discriminators every other batch
-        # ---------------------------
+        
         if num_batches % 2 == 0:
-            # Train Discriminator A
+            
             optimizer_D_A.zero_grad()
             loss_real_A = adversarial_loss(D_A(real_A), valid)
             loss_fake_A = adversarial_loss(D_A(fake_A.detach()), fake_label)
@@ -129,7 +115,7 @@ while True:
             loss_D_A.backward()
             optimizer_D_A.step()
             
-            # Train Discriminator B
+            
             optimizer_D_B.zero_grad()
             loss_real_B = adversarial_loss(D_B(real_B), valid)
             loss_fake_B = adversarial_loss(D_B(fake_B.detach()), fake_label)
@@ -139,24 +125,20 @@ while True:
         
         num_batches += 1
 
-    # ---------------------------
-    # Evaluate every eval_interval epochs
-    # ---------------------------
+   
     if epoch % eval_interval == 0:
         G_A2B.eval()
-        # Use the entire evaluation set X_eval for generation
+        
         X_eval_tensor = torch.tensor(X_eval, dtype=torch.float32).to(device)
         
         with torch.no_grad():
             generated_output = G_A2B(X_eval_tensor).cpu().numpy()
         
-        # Inverse transform the generated output
+        
         generated_output = scaler_Y.inverse_transform(generated_output)
         generated_df = pd.DataFrame(generated_output, columns=target_data.columns[:10])
         
-        # ---------------------------
-        # Evaluate using the Qsc module
-        # ---------------------------
+        
         from qsc import Qsc
         from qsc.util import mu0, fourier_minimum, to_Fourier
         
@@ -165,7 +147,7 @@ while True:
         
         for index, row in generated_df.iterrows():
             try:
-                # Extract parameters from the row
+                
                 label = [row['rc1'], row['rc2'], row['rc3'],
                          row['zs1'], row['zs2'], row['zs3'],
                          row['nfp'], row['etabar'], row['B2c'], row['p2']]
@@ -176,7 +158,7 @@ while True:
                 B2c_value = row['B2c']
                 p2_value = row['p2']
     
-                # Create Qsc object
+                
                 stel = Qsc(
                     rc=[1.] + rc_values,
                     zs=[0.] + zs_values,
@@ -199,7 +181,7 @@ while True:
                 beta           = -mu0 * p2_value * (stel.r_singularity ** 2) / (stel.B0 ** 2)
                 DMerc_times_r2 = stel.DMerc_times_r2
     
-                # Check basic and Fourier conditions
+                
                 if (axis_length > 0 and
                     abs(iota) >= 0.2 and
                     max_elongation <= 10 and
@@ -223,17 +205,17 @@ while True:
             except Exception as e:
                 print(f"Row {index} raised an error: {e}")
         
-        # Calculate accuracy ratios
+        
         accuracy_basic = len(basic_valid) / len(generated_df) * 100
         accuracy_fourier = len(valid_with_fourier) / len(generated_df) * 100
         print(f"Evaluation at Epoch {epoch}: Basic Accuracy: {accuracy_basic:.2f}%, Fourier Accuracy: {accuracy_fourier:.2f}%")
         
-        # Record evaluation results
+        
         eval_steps.append(epoch)
         basic_ratio_list.append(accuracy_basic)
         fourier_ratio_list.append(accuracy_fourier)
         
-        # Check for improvement: if neither ratio improves, increment counter; else, reset counter and save best model
+        
         if (accuracy_basic <= best_basic_ratio) or (accuracy_fourier <= best_fourier_ratio):
             no_improve_count += 1
             print(f"No improvement count: {no_improve_count}")
@@ -245,14 +227,12 @@ while True:
             torch.save(best_generator_state, 'G_A2B_best_model.pth')
             print("New best generator saved.")
         
-        # Stop training if no improvement for 'patience' consecutive evaluations
+        
         if no_improve_count >= patience:
             print("Early stopping: No improvement in 10 consecutive evaluations.")
             break
 
-# ---------------------------
-# Plot Evaluation Accuracy Curves
-# ---------------------------
+
 plt.figure(figsize=(10, 5))
 plt.plot(eval_steps, basic_ratio_list, label='Basic QSC Accuracy')
 plt.plot(eval_steps, fourier_ratio_list, label='Fourier QSC Accuracy')
