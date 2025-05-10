@@ -4,4 +4,5 @@ __pycache__/
 .vscode/settings.json
 output/
 wout.nc
-stel_results.parquet
+*.parquet*
+*.nc*

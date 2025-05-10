@@ -1,9 +1,21 @@
+#### ADD LOSS FRACTIONS FROM S=0.25 WITH ESSOS and LE/LI from MONKES
+
 import os
 import re
-import csv
+import gc
 import h5py
+import time
+import psutil
+import datetime
+import tracemalloc
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from collections import defaultdict
+
+from glob import glob
+from mpi4py import MPI
 from desc.io import load
 from desc.vmec import VMECIO
 from simsopt.mhd import Vmec, vmec_compute_geometry, QuasisymmetryRatioResidual
@@ -14,159 +26,176 @@ GX_zenodo_dir = "/Users/rogeriojorge/Downloads/GX_stellarator_zenodo"
 CycleGAN_dir = "/Users/rogeriojorge/local/CycleGAN"
 data_folder = "20250119-01-gyrokinetics_machine_learning_zenodo/data_generation_and_analysis"
 h5_path = os.path.join(GX_zenodo_dir, "20250102-01_GX_stellarator_dataset.h5")
-csv_path = os.path.join(CycleGAN_dir, "stel_results.csv")
 parquet_path = os.path.join(CycleGAN_dir, "stel_results.parquet")
+merge_interval = 60
 
-# === Load HDF5 Data ===
-with h5py.File(h5_path, "r") as f:
-    equilibrium_class = f["/equilibrium_class"][()]
-    equilibrium_class_descriptions = f["/equilibrium_class_descriptions"][()]
-    equilibrium_files = f["/equilibrium_files"][()]
-    FSA_grad_xs = f["/FSA_grad_xs"][()]
-    fixed_gradient_simulations_Q_avgs = f["/fixed_gradient_simulations/Q_avgs"][()]
-    fixed_gradient_simulations_Q_avgs_divided_by_FSA_grad_x = f["/fixed_gradient_simulations/Q_avgs_divided_by_FSA_grad_x"][()]
-    fixed_gradient_simulations_Q_avgs_vs_z = f["/fixed_gradient_simulations/Q_avgs_vs_z"][()]
-    fixed_gradient_simulations_Q_stds = f["/fixed_gradient_simulations/Q_stds"][()]
-    fixed_gradient_simulations_Q_stds_divided_by_FSA_grad_x = f["/fixed_gradient_simulations/Q_stds_divided_by_FSA_grad_x"][()]
-    fixed_gradient_simulations_a_over_LT = f["/fixed_gradient_simulations/a_over_LT"][()]
-    fixed_gradient_simulations_a_over_Ln = f["/fixed_gradient_simulations/a_over_Ln"][()]
-    fixed_gradient_simulations_zonal_phi2_amplitudes = f["/fixed_gradient_simulations/zonal_phi2_amplitudes"][()]
-    n_tubes = f["/n_tubes"][()]
-    scalar_feature_matrix = f["/scalar_feature_matrix"][()]
-    scalar_features = f["/scalar_features"][()]
-    scalar_features = [s.decode("utf-8") if isinstance(s, bytes) else s for s in scalar_features]
-    varied_gradient_simulations_Q_avgs = f["/varied_gradient_simulations/Q_avgs"][()]
-    varied_gradient_simulations_Q_avgs_divided_by_FSA_grad_x = f["/varied_gradient_simulations/Q_avgs_divided_by_FSA_grad_x"][()]
-    varied_gradient_simulations_Q_avgs_vs_z = f["/varied_gradient_simulations/Q_avgs_vs_z"][()]
-    varied_gradient_simulations_Q_stds = f["/varied_gradient_simulations/Q_stds"][()]
-    varied_gradient_simulations_Q_stds_divided_by_FSA_grad_x = f["/varied_gradient_simulations/Q_stds_divided_by_FSA_grad_x"][()]
-    varied_gradient_simulations_a_over_LT = f["/varied_gradient_simulations/a_over_LT"][()]
-    varied_gradient_simulations_a_over_Ln = f["/varied_gradient_simulations/a_over_Ln"][()]
-    varied_gradient_simulations_zonal_phi2_amplitudes = f["/varied_gradient_simulations/zonal_phi2_amplitudes"][()]
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
 
-n_files = len(equilibrium_files)
+def log(msg):
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now}] [Rank {rank}] {msg}", flush=True)
 
-old_eq_file_path = ""
-for file_index in range(n_files):
-    # === Load and Process VMEC Equilibrium ===
-    eq_file_relpath = equilibrium_files[file_index].decode("utf-8") if isinstance(equilibrium_files[file_index], bytes) else equilibrium_files[file_index]
-    eq_file_path = os.path.join(GX_zenodo_dir, data_folder, eq_file_relpath)
-    print(f'Processing index {file_index + 1} of {n_files} with file {eq_file_path}')
-    if eq_file_path != old_eq_file_path:
-        eq = load(eq_file_path)
-        VMECIO.save(eq, 'wout.nc')
-        stel = Vmec("wout.nc")
-        old_eq_file_path = eq_file_path
-        
-    # === Compute Diagnostics ===
-    target_surfaces = np.linspace(0, 1, 11)
-    qa = np.sum(QuasisymmetryRatioResidual(stel, target_surfaces, helicity_m=1, helicity_n=0).residuals()**2)
-    qh = np.sum(QuasisymmetryRatioResidual(stel, target_surfaces, helicity_m=1, helicity_n=-1).residuals()**2)
-    
+def memory_report(prefix=""):
+    process = psutil.Process(os.getpid())
+    mem_MB = process.memory_info().rss / 1024 / 1024
+    print(f"[Rank {rank}] {prefix} Memory usage: {mem_MB:.2f} MB", flush=True)
+
+def load_static_data():
+    with h5py.File(h5_path, "r") as f:
+        eq_classes = f["/equilibrium_files"][()]
+        scalar_features = [s.decode("utf-8") for s in f["/scalar_features"][()]]
+        scalar_feature_matrix = f["/scalar_feature_matrix"][()]
+        FSA_grad_xs = f["/FSA_grad_xs"][()]
+        fixed_keys = [
+            "Q_avgs", "Q_avgs_divided_by_FSA_grad_x", "Q_stds",
+            "Q_stds_divided_by_FSA_grad_x", "a_over_LT", "a_over_Ln",
+            "zonal_phi2_amplitudes"
+        ]
+        fixed_data = {key: f[f"/fixed_gradient_simulations/{key}"][()] for key in fixed_keys}
+        varied_data = {key: f[f"/varied_gradient_simulations/{key}"][()] for key in fixed_keys}
+    return eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data
+
+def process_equilibrium(i, eq_relpath, old_eq_path, eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data):
+    eq_path = os.path.join(GX_zenodo_dir, data_folder, eq_relpath)
+    print(f"[Rank {rank}] Processing {i+1}/{len(eq_classes)}: {eq_relpath}", flush=True)
+
+    local_wout = f"wout_rank{rank}.nc"
+    # Only load and save the equilibrium if it hasn't been processed yet by this rank
+    if eq_path != old_eq_path:
+        eq = load(eq_path)
+        VMECIO.save(eq, local_wout, verbose=0)
+        old_eq_path = eq_path
+
+    stel = Vmec(local_wout)
+
+    s_targets = np.linspace(0, 1, 11)
+    qa = np.sum(QuasisymmetryRatioResidual(stel, s_targets, helicity_m=1, helicity_n=0).residuals()**2)
+    qh = np.sum(QuasisymmetryRatioResidual(stel, s_targets, helicity_m=1, helicity_n=-1).residuals()**2)
+    qp = np.sum(QuasisymmetryRatioResidual(stel, s_targets, helicity_m=0, helicity_n=-1).residuals()**2)
     try:
         qi = np.sum(QuasiIsodynamicResidual(stel, [1/16, 5/16])**2)
     except Exception as e:
-        print(f"Error calculating qi for file index {file_index}: {e}")
+        print(f"[Rank {rank}] Error calculating qi at index {i}: {e}")
         qi = np.nan
-        
-    data = vmec_compute_geometry(stel, s=1, theta=np.linspace(0, 2 * np.pi, 50), phi=np.linspace(0, 2 * np.pi, 150))
-    L_grad_B_max = np.max(data.L_grad_B)
-    L_grad_B_min = np.min(data.L_grad_B)
 
-    # === Extract VMEC Quantities ===
-    iota_axis = stel.iota_axis()
-    iota_edge = stel.iota_edge()
-    mean_iota = stel.mean_iota()
-    shear = stel.mean_shear()
-    well = stel.vacuum_well()
-    elongation = np.max(MaxElongationPen(stel))
-    mirror = MirrorRatioPen(stel)
-    Dmerc_min = np.min(stel.wout.DMerc[1:])
-    Dmerc_max = np.max(stel.wout.DMerc[1:])
-    volume = stel.volume()
-    betatotal = stel.wout.betatotal
-    am_pressure = stel.wout.am
-    phiedge = stel.wout.phi[-1]
+    geom = vmec_compute_geometry(stel, s=1, theta=np.linspace(0, 2*np.pi, 50), phi=np.linspace(0, 2*np.pi, 150))
+    L_grad_B_max = np.max(geom.L_grad_B)
+    L_grad_B_min = np.min(geom.L_grad_B)
 
-    # === Extract Boundary Modes ===
-    surf = stel.boundary
-    formatted_modes = [
-        f"rbc_{int(match.group(2))}_{int(match.group(3))}" if match.group(1) == "rc"
-        else f"zbs_{int(match.group(2))}_{int(match.group(3))}"
-        for name in surf.dof_names if (match := re.search(r":(rc|zs)\(([-\d]+),([-\d]+)\)", name))
+    results = [
+        qa, qh, qp, qi,
+        stel.iota_axis(), stel.iota_edge(), stel.mean_iota(), stel.mean_shear(),
+        stel.vacuum_well(), np.max(MaxElongationPen(stel)), MirrorRatioPen(stel),
+        np.min(stel.wout.DMerc[1:]), np.max(stel.wout.DMerc[1:]),
+        stel.volume(), stel.wout.betatotal, stel.wout.phi[-1],
+        FSA_grad_xs[i]
     ]
 
-    # === CSV Columns and Values ===
-    columns = (
-        ['qa', 'qh', 'qi', 'iota_axis', 'iota_edge', 'mean_iota', 'shear', 'well', 'elongation',
-        'mirror', 'Dmerc_min', 'Dmerc_max', 'volume', 'betatotal', 'phiedge', 'FSA_grad_xs',
-        'fixed_grad_Q', 'fixed_grad_Q_over_FSA_grad_x', 'fixed_grad_Q_std', 'fixed_grad_Q_std_over_FSA_grad_x',
-        'fixed_grad_a_over_LT', 'fixed_grad_a_over_Ln', 'fixed_grad_zonal_phi2',
-        'varied_grad_Q', 'varied_grad_Q_over_FSA_grad_x', 'varied_grad_Q_std', 'varied_grad_Q_std_over_FSA_grad_x',
-        'varied_grad_a_over_LT', 'varied_grad_a_over_Ln', 'varied_grad_zonal_phi2',
-        'L_grad_B_max', 'L_grad_B_min'
-        ]
-        + formatted_modes
-        + [f"am_pressure_{i}" for i in range(len(am_pressure))]
-        + scalar_features
+    for key in fixed_data:
+        results.append(fixed_data[key][i])
+    for key in varied_data:
+        results.append(varied_data[key][i])
+
+    results += [L_grad_B_max, L_grad_B_min]
+
+    surf = stel.boundary
+    mode_names = [
+        f"rbc_{int(m.group(2))}_{int(m.group(3))}" if m.group(1) == "rc" else f"zbs_{int(m.group(2))}_{int(m.group(3))}"
+        for name in surf.dof_names if (m := re.search(r":(rc|zs)\(([-\d]+),([-\d]+)\)", name))
+    ]
+    results += list(surf.x)
+
+    results += list(stel.wout.am)
+    results += list(scalar_feature_matrix[i])
+
+    all_columns = (
+        ['qa', 'qh', 'qp', 'qi', 'iota_axis', 'iota_edge', 'mean_iota', 'shear', 'well', 'elongation',
+         'mirror', 'Dmerc_min', 'Dmerc_max', 'volume', 'betatotal', 'phiedge', 'FSA_grad_xs'] +
+        [f"fixed_grad_{k}" for k in fixed_data] +
+        [f"varied_grad_{k}" for k in varied_data] +
+        ['L_grad_B_max', 'L_grad_B_min'] +
+        mode_names +
+        [f"am_pressure_{j}" for j in range(len(stel.wout.am))] +
+        scalar_features
     )
-   
-    results = np.concatenate([
-        [qa, qh, qi, iota_axis, iota_edge, mean_iota, shear, well, elongation,
-        mirror, Dmerc_min, Dmerc_max, volume, betatotal, phiedge, FSA_grad_xs[file_index],
-        fixed_gradient_simulations_Q_avgs[file_index],
-        fixed_gradient_simulations_Q_avgs_divided_by_FSA_grad_x[file_index],
-        fixed_gradient_simulations_Q_stds[file_index],
-        fixed_gradient_simulations_Q_stds_divided_by_FSA_grad_x[file_index],
-        fixed_gradient_simulations_a_over_LT[file_index],
-        fixed_gradient_simulations_a_over_Ln[file_index],
-        fixed_gradient_simulations_zonal_phi2_amplitudes[file_index],
-        varied_gradient_simulations_Q_avgs[file_index],
-        varied_gradient_simulations_Q_avgs_divided_by_FSA_grad_x[file_index],
-        varied_gradient_simulations_Q_stds[file_index],
-        varied_gradient_simulations_Q_stds_divided_by_FSA_grad_x[file_index],
-        varied_gradient_simulations_a_over_LT[file_index],
-        varied_gradient_simulations_a_over_Ln[file_index],
-        varied_gradient_simulations_zonal_phi2_amplitudes[file_index],
-        L_grad_B_max, L_grad_B_min
-        ],
-        surf.x,
-        am_pressure,
-        scalar_feature_matrix[file_index]
-    ])
+    df_row = pd.DataFrame([results], columns=all_columns)
 
-    # Convert results to string
-    results_str = list(map(str, results))
+    # # Clean up wout file
+    # os.remove(local_wout)
+    return df_row, old_eq_path
 
-    # # === Write or Append to CSV ===
-    # file_exists = os.path.exists(csv_path)
+def maybe_merge_parquet_files(merged_file_path):
+    parquet_files = glob("*rank*.parquet")
+    if not parquet_files: return
+    print(f"[Rank 0] Merging {len(parquet_files)} parquet files...")
+    dfs = [pd.read_parquet(f) for f in parquet_files]
+    merged_df = pd.concat(dfs, ignore_index=True)
+    merged_df.to_parquet(merged_file_path, index=False)
+    print(f"[Rank 0] Wrote merged file to {merged_file_path}")
 
-    # # Open file in write mode if it doesn't exist, or read+write mode if it does
-    # with open(csv_path, 'a+', newline='') as f:
-    #     f.seek(0)  # Move file pointer to the beginning
-    #     reader = csv.reader(f)
-    #     rows = list(reader)  # Read all rows to check for duplicates
+def main():
+    last_merge_time = time.time()
+    tracemalloc.start()
+    memory_report("Start")
 
-    #     writer = csv.writer(f)
+    eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data = load_static_data()
+    old_eq_path = ""
 
-    #     # If the file is empty or doesn't exist, write the header
-    #     if not file_exists or not rows:
-    #         writer.writerow(columns)
+    # === Group indices by unique equilibrium file ===
+    eq_to_indices = defaultdict(list)
+    for idx, eq_relpath in enumerate(eq_classes):
+        key = eq_relpath.decode() if isinstance(eq_relpath, bytes) else eq_relpath
+        eq_to_indices[key].append(idx)
 
-    #     # Check if results_str already exists, and append if it does not
-    #     if results_str not in [row for row in rows]:
-    #         writer.writerow(results_str)
-            
-    # Convert results to DataFrame
-    df_new = pd.DataFrame([results], columns=columns)
+    # === Distribute groups of indices (same eq_class) across ranks ===
+    eq_keys_sorted = sorted(eq_to_indices.keys())
+    eq_chunks = [eq_keys_sorted[i::size] for i in range(size)]  # round-robin allocation
 
-    # If file exists, load and check for duplicates
-    if os.path.exists(parquet_path):
-        df_existing = pd.read_parquet(parquet_path)
+    # === Indices this rank will process ===
+    my_indices = []
+    for eq_key in eq_chunks[rank]:
+        my_indices.extend(eq_to_indices[eq_key])
+
+    # === Main loop for processing ===
+    for i in my_indices:
+        eq_relpath = eq_classes[i].decode() if isinstance(eq_classes[i], bytes) else eq_classes[i]
+        try:
+            df_row, old_eq_path = process_equilibrium(
+                i, eq_relpath, old_eq_path, eq_classes, scalar_features,
+                scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data
+            )
+            # Save a separate file per rank to avoid write collisions
+            local_parquet = parquet_path.replace(".parquet", f"_rank{rank}.parquet")
+            table = pa.Table.from_pandas(df_row)
+            if not os.path.exists(local_parquet):
+                pq.write_table(table, local_parquet, compression="zstd")
+            else:
+                with pq.ParquetWriter(local_parquet, table.schema, compression="zstd", use_dictionary=True) as writer:
+                    writer.write_table(table)
+        except Exception as e:
+            print(f"[Rank {rank}] ERROR at index {i}: {e}", flush=True)
+        memory_report(f"After index {i}")
+        gc.collect()
         
-        # Check if new row is a duplicate
-        if not (df_existing[columns] == df_new[columns].iloc[0]).all(axis=1).any():
-            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-            df_combined.to_parquet(parquet_path, index=False)
-    else:
-        df_new.to_parquet(parquet_path, index=False)
+        # Periodically merge
+        if rank == 0 and (time.time() - last_merge_time) > merge_interval:
+            maybe_merge_parquet_files(merged_file_path=parquet_path)
+            last_merge_time = time.time()
+
+    # Remove all wout files created by this rank
+    local_wout_files = glob(f"wout_rank{rank}*.nc")
+    for wout_file in local_wout_files:
+        try:
+            os.remove(wout_file)
+            print(f"[Rank {rank}] Removed {wout_file}", flush=True)
+        except Exception as e:
+            print(f"[Rank {rank}] Error removing {wout_file}: {e}", flush=True)
+
+    current, peak = tracemalloc.get_traced_memory()
+    print(f"[Rank {rank}] Final memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB", flush=True)
+    tracemalloc.stop()
+
+if __name__ == "__main__":
+    main()

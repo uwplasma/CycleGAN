@@ -182,7 +182,7 @@ def QuasiIsodynamicResidual(vmec,snorms,weights=None,
             def F_l():
                 R1 = (1 - Bl[0])
                 R2 = -Bl[-1]
-                x1 = (phisl - phisl[0]) / (phisl[-1] - phisl[0])
+                x1 = (phisl - phisl[0]) / (phisl[-1] - phisl[0] + 1e-12)
                 x1lp5 = x1 < 0.5
                 t1 = x1lp5 * R1*((np.cos(2*np.pi*x1) + 1) / 2)**pmax
                 t2 = (1 - x1lp5) * R2*((np.cos(2*np.pi*x1) + 1) / 2)**pmin
@@ -190,7 +190,7 @@ def QuasiIsodynamicResidual(vmec,snorms,weights=None,
             def F_r():
                  R1 = 1 - Br[-1]
                  R2 = -Br[0]
-                 x1 = (phisr - phisr[0]) / (phisr[-1] - phisr[0])
+                 x1 = (phisr - phisr[0]) / (phisr[-1] - phisr[0] + 1e-12)
                  x1lp5 = x1 < 0.5
                  t1 = x1lp5 * R2*((np.cos(2*np.pi*x1) + 1) / 2)**pmin
                  t2 = (1 - x1lp5) * R1*((np.cos(2*np.pi*x1) + 1) / 2)**pmax
