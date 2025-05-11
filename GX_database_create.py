@@ -1,5 +1,6 @@
 #### ADD LOSS FRACTIONS FROM S=0.25 WITH ESSOS and LE/LI from MONKES
 
+
 import os
 import re
 import gc
@@ -10,10 +11,7 @@ import datetime
 import tracemalloc
 import numpy as np
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 from collections import defaultdict
-
 from glob import glob
 from mpi4py import MPI
 from desc.io import load
@@ -26,8 +24,9 @@ GX_zenodo_dir = "/Users/rogeriojorge/Downloads/GX_stellarator_zenodo"
 CycleGAN_dir = "/Users/rogeriojorge/local/CycleGAN"
 data_folder = "20250119-01-gyrokinetics_machine_learning_zenodo/data_generation_and_analysis"
 h5_path = os.path.join(GX_zenodo_dir, "20250102-01_GX_stellarator_dataset.h5")
-parquet_path = os.path.join(CycleGAN_dir, "stel_results.parquet")
-merge_interval = 60
+csv_path = os.path.join(CycleGAN_dir, "stel_results.csv")
+wouts_dir = "wouts"
+os.makedirs(wouts_dir, exist_ok=True)
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -57,16 +56,17 @@ def load_static_data():
         varied_data = {key: f[f"/varied_gradient_simulations/{key}"][()] for key in fixed_keys}
     return eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data
 
-def process_equilibrium(i, eq_relpath, old_eq_path, eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data):
+def process_equilibrium(i, eq_relpath, eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data):
     eq_path = os.path.join(GX_zenodo_dir, data_folder, eq_relpath)
     print(f"[Rank {rank}] Processing {i+1}/{len(eq_classes)}: {eq_relpath}", flush=True)
 
-    local_wout = f"wout_rank{rank}.nc"
-    # Only load and save the equilibrium if it hasn't been processed yet by this rank
-    if eq_path != old_eq_path:
+    eq_filename = os.path.basename(eq_relpath).replace(".h5", "")
+    local_wout = os.path.join(wouts_dir, f"wout_{eq_filename}.nc")
+    
+    # Only load and save the equilibrium if it hasn't been processed yet
+    if not os.path.exists(local_wout):
         eq = load(eq_path)
         VMECIO.save(eq, local_wout, verbose=0)
-        old_eq_path = eq_path
 
     stel = Vmec(local_wout)
 
@@ -122,26 +122,13 @@ def process_equilibrium(i, eq_relpath, old_eq_path, eq_classes, scalar_features,
     )
     df_row = pd.DataFrame([results], columns=all_columns)
 
-    # # Clean up wout file
-    # os.remove(local_wout)
-    return df_row, old_eq_path
-
-def maybe_merge_parquet_files(merged_file_path):
-    parquet_files = glob("*rank*.parquet")
-    if not parquet_files: return
-    print(f"[Rank 0] Merging {len(parquet_files)} parquet files...")
-    dfs = [pd.read_parquet(f) for f in parquet_files]
-    merged_df = pd.concat(dfs, ignore_index=True)
-    merged_df.to_parquet(merged_file_path, index=False)
-    print(f"[Rank 0] Wrote merged file to {merged_file_path}")
+    return df_row
 
 def main():
-    last_merge_time = time.time()
     tracemalloc.start()
     memory_report("Start")
 
     eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data = load_static_data()
-    old_eq_path = ""
 
     # === Group indices by unique equilibrium file ===
     eq_to_indices = defaultdict(list)
@@ -162,36 +149,21 @@ def main():
     for i in my_indices:
         eq_relpath = eq_classes[i].decode() if isinstance(eq_classes[i], bytes) else eq_classes[i]
         try:
-            df_row, old_eq_path = process_equilibrium(
-                i, eq_relpath, old_eq_path, eq_classes, scalar_features,
+            df_row = process_equilibrium(
+                i, eq_relpath, eq_classes, scalar_features,
                 scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data
             )
-            # Save a separate file per rank to avoid write collisions
-            local_parquet = parquet_path.replace(".parquet", f"_rank{rank}.parquet")
-            table = pa.Table.from_pandas(df_row)
-            if not os.path.exists(local_parquet):
-                pq.write_table(table, local_parquet, compression="zstd")
+
+            # Save to CSV for each rank
+            if not os.path.exists(csv_path):
+                df_row.to_csv(csv_path, mode='w', header=True, index=False)
             else:
-                with pq.ParquetWriter(local_parquet, table.schema, compression="zstd", use_dictionary=True) as writer:
-                    writer.write_table(table)
+                df_row.to_csv(csv_path, mode='a', header=False, index=False)
         except Exception as e:
             print(f"[Rank {rank}] ERROR at index {i}: {e}", flush=True)
+
         memory_report(f"After index {i}")
         gc.collect()
-        
-        # Periodically merge
-        if rank == 0 and (time.time() - last_merge_time) > merge_interval:
-            maybe_merge_parquet_files(merged_file_path=parquet_path)
-            last_merge_time = time.time()
-
-    # Remove all wout files created by this rank
-    local_wout_files = glob(f"wout_rank{rank}*.nc")
-    for wout_file in local_wout_files:
-        try:
-            os.remove(wout_file)
-            print(f"[Rank {rank}] Removed {wout_file}", flush=True)
-        except Exception as e:
-            print(f"[Rank {rank}] Error removing {wout_file}: {e}", flush=True)
 
     current, peak = tracemalloc.get_traced_memory()
     print(f"[Rank {rank}] Final memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB", flush=True)

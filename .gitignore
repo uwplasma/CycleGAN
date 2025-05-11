@@ -6,3 +6,6 @@ output/
 wout.nc
 *.parquet*
 *.nc*
+log.txt
+GX_database_create.py
+stel_results.csv
