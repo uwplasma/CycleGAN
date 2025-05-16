@@ -4,13 +4,13 @@ from scipy.interpolate import UnivariateSpline
 from scipy.optimize import fsolve
 from scipy.special import ellipe
 import warnings
+import matplotlib.pyplot as plt
 warnings.filterwarnings('ignore', 'The iteration is not making good progress')
 
 # Returns a magnetic field's QI deviation on a flux surface
 def QuasiIsodynamicResidual(vmec,snorms,weights=None,
-                nphi=141,nalpha=27,nBj=51,
-                mpol=18,ntor=18,
-                nphi_out=2000,
+                nphi=141,nalpha=27,nBj=51, mpol=18,ntor=18,
+                nphi_out=2000, phimin=None, phimax=None,
                 arr_out=True):
     """
     Calculate the deviation in omnigenity for a VMEC equilibrium at some normalized toroidal flux.
@@ -76,11 +76,13 @@ def QuasiIsodynamicResidual(vmec,snorms,weights=None,
     ####################################################################################
     ####################################################################################
     ####################################################################################
-    if vmec.wout.bmnc[1,1] < 0:
-        phimin = np.pi/nfp
-    else:
-        phimin = 0
-    phimax = phimin + 2*np.pi/nfp
+    if phimin is None:
+        if vmec.wout.bmnc[1,1] < 0:
+            phimin = np.pi/nfp
+        else:
+            phimin = 0
+    if phimax is None:
+        phimax = phimin + 2*np.pi/nfp
 
     phis2D = np.tile( np.linspace(phimin, phimax,nphi), (nalpha,1)).T
 
@@ -133,148 +135,171 @@ def QuasiIsodynamicResidual(vmec,snorms,weights=None,
         phipp_arr = np.zeros((nalpha,2*nBj-1))
         wts = np.zeros(nalpha)
 
+        failed_alpha = []
         for ialpha in range(nalpha):
-            # Fieldline information
-            Ba = 1*B[:,ialpha]
-            phisa = 1*phis2D[:,ialpha]
-            # Index of the minimum of B on the fieldline
-            indmin = np.argmin(Ba)
+            try:
+                # Fieldline information
+                Ba = 1*B[:,ialpha]
+                phisa = 1*phis2D[:,ialpha]
+                # Index of the minimum of B on the fieldline
+                indmin = np.argmin(Ba)
 
-            ######## LEFT SIDE SQUASH ########
-            # Define the left-hand-side of the well as everything to the left of the minimum
-            Bl = 1*Ba[:indmin+1]
-            phisl = phisa[:indmin+1]
-            phisr = phisa[indmin:]           
-            # Location of maximum of LHS of well
-            indmax_l = np.argmax(Bl)
-            Bl[:indmax_l] = Bl[indmax_l]
-            # Squash the rest of the well
-            for i in range(len(Bl)-1):
-                if Bl[i] <= Bl[i+1]:
-                    jf = len(Bl)-1
-                    for j in range(i+1,len(Bl)):
-                        if Bl[j] < Bl[i]:
-                            jf = j
-                            break
-                    Bl[i:jf] = Bl[i]
+                ######## LEFT SIDE SQUASH ########
+                # Define the left-hand-side of the well as everything to the left of the minimum
+                Bl = 1*Ba[:indmin+1]
+                phisl = phisa[:indmin+1]
+                phisr = phisa[indmin:]           
+                # Location of maximum of LHS of well
+                indmax_l = np.argmax(Bl)
+                Bl[:indmax_l] = Bl[indmax_l]
+                # Squash the rest of the well
+                for i in range(len(Bl)-1):
+                    if Bl[i] <= Bl[i+1]:
+                        jf = len(Bl)-1
+                        for j in range(i+1,len(Bl)):
+                            if Bl[j] < Bl[i]:
+                                jf = j
+                                break
+                        Bl[i:jf] = Bl[i]
 
-            ######## RIGHT SIDE SQUASH ########
-            # Same process for right-hand-side
-            Br = 1*Ba[indmin:]
-            indmax_r = np.argmax(Br)
-            # If the maximum is NOT at the end of the well
-            Br[indmax_r:] = Br[indmax_r]
-            # Squash the rest of the well
-            for j in range(len(Br)-1,1,-1):
-                if Br[j-1] >= Br[j]:
-                    kf = 0
-                    for k in range(j-1,1,-1):
-                        if Br[k] < Br[j]:
-                            kf = k
-                            break
-                    Br[kf+1:j] = Br[j]
-            
-            ################################################################
-            ########################### STRETCH ############################
-            ################################################################
-            pmax=50
-            pmin=15
-            def F_l():
-                R1 = (1 - Bl[0])
-                R2 = -Bl[-1]
-                x1 = (phisl - phisl[0]) / (phisl[-1] - phisl[0] + 1e-14)
-                x1lp5 = x1 < 0.5
-                t1 = x1lp5 * R1*((np.cos(2*np.pi*x1) + 1) / 2)**pmax
-                t2 = (1 - x1lp5) * R2*((np.cos(2*np.pi*x1) + 1) / 2)**pmin
-                return t1 + t2
-            def F_r():
-                 R1 = 1 - Br[-1]
-                 R2 = -Br[0]
-                 x1 = (phisr - phisr[0]) / (phisr[-1] - phisr[0] + 1e-14)
-                 x1lp5 = x1 < 0.5
-                 t1 = x1lp5 * R2*((np.cos(2*np.pi*x1) + 1) / 2)**pmin
-                 t2 = (1 - x1lp5) * R1*((np.cos(2*np.pi*x1) + 1) / 2)**pmax
-                 return t1 + t2
-            F_l = F_l()
-            F_r = F_r()
-            Bl = Bl + 1*F_l
-            Br = Br + 1*F_r
-            Bl = Bl[:-1]
+                ######## RIGHT SIDE SQUASH ########
+                # Same process for right-hand-side
+                Br = 1*Ba[indmin:]
+                indmax_r = np.argmax(Br)
+                # If the maximum is NOT at the end of the well
+                Br[indmax_r:] = Br[indmax_r]
+                # Squash the rest of the well
+                for j in range(len(Br)-1,1,-1):
+                    if Br[j-1] >= Br[j]:
+                        kf = 0
+                        for k in range(j-1,1,-1):
+                            if Br[k] < Br[j]:
+                                kf = k
+                                break
+                        Br[kf+1:j] = Br[j]
+                
+                ################################################################
+                ########################### STRETCH ############################
+                ################################################################
+                pmax=50
+                pmin=15
+                def F_l():
+                    R1 = (1 - Bl[0])
+                    R2 = -Bl[-1]
+                    x1 = (phisl - phisl[0]) / (phisl[-1] - phisl[0] + 1e-14)
+                    x1lp5 = x1 < 0.5
+                    t1 = x1lp5 * R1*((np.cos(2*np.pi*x1) + 1) / 2)**pmax
+                    t2 = (1 - x1lp5) * R2*((np.cos(2*np.pi*x1) + 1) / 2)**pmin
+                    return t1 + t2
+                def F_r():
+                    R1 = 1 - Br[-1]
+                    R2 = -Br[0]
+                    x1 = (phisr - phisr[0]) / (phisr[-1] - phisr[0] + 1e-14)
+                    x1lp5 = x1 < 0.5
+                    t1 = x1lp5 * R2*((np.cos(2*np.pi*x1) + 1) / 2)**pmin
+                    t2 = (1 - x1lp5) * R1*((np.cos(2*np.pi*x1) + 1) / 2)**pmax
+                    return t1 + t2
+                F_l = F_l()
+                F_r = F_r()
+                Bl = Bl + 1*F_l
+                Br = Br + 1*F_r
+                Bl = Bl[:-1]
 
-            # The new (phi,B) fieldline
-            Blr = 1*np.concatenate((Bl,Br))
+                # The new (phi,B) fieldline
+                Blr = 1*np.concatenate((Bl,Br))
 
-            # Weights for measuring bounce distances
-            wtf = UnivariateSpline(phis2D[:,ialpha], np.abs(Ba - Blr)**2)
-            wts[ialpha] = (phimax - phimin) / wtf.integral(phimin,phimax)
-            
-            # Store magnetic field strengths
-            Bp_arr[ialpha,:] = 1*Blr
-            
-            # Find all bounce distances of the squashed+stretched well, as well
-            # as the location of the bounces
-            for j in range(nBj):
-                Bj = Bjs[j]
-                phip1,phip2,m1,m2 = GetBranches(phisa,Blr,Bj,1,0)
-                bncs[ialpha,j] = 1*(phip2-phip1)
+                # Weights for measuring bounce distances
+                wtf = UnivariateSpline(phis2D[:,ialpha], np.abs(Ba - Blr)**2)
+                wts[ialpha] = (phimax - phimin) / wtf.integral(phimin,phimax)
+                
+                # Store magnetic field strengths
+                Bp_arr[ialpha,:] = 1*Blr
+                
+                # Find all bounce distances of the squashed+stretched well, as well
+                # as the location of the bounces
+                for j in range(nBj):
+                    Bj = Bjs[j]
+                    phip1,phip2,m1,m2 = GetBranches(phisa,Blr,Bj,1,0)
+                    bncs[ialpha,j] = 1*(phip2-phip1)
 
-                phip_arr[ialpha, nBj - j - 1] = 1*phip1
-                phip_arr[ialpha, nBj + j - 1] = 1*phip2
+                    phip_arr[ialpha, nBj - j - 1] = 1*phip1
+                    phip_arr[ialpha, nBj + j - 1] = 1*phip2
+            except Exception as e:
+                # print(f"[WARN] squash/stretch failed at ialpha={ialpha}: {e}")
+                failed_alpha.append(ialpha)
+                # Optionally: zero out weight or skip further computation
+                wts[ialpha] = 0
+                continue
 
         ################################################################
         ########################### SHUFFLE ############################
         ################################################################
         # Normalize weights, and calculate the weighted mean bounce
         # distances
-        wts = wts / np.sum(wts)
+        wts = wts / (np.sum(wts) + 1e-14)
         mbncs = (np.sum(bncs * wts[:,np.newaxis],axis=0))
 
         # Shuffle the well
         mean_denom = 0
         Bpps = np.concatenate( (np.flip(Bjs), Bjs[1:]) )
         for ialpha in range(nalpha):
-            dbncs = (bncs[ialpha,:] - mbncs)/2
-            phils = 1*phip_arr[ialpha,:nBj]
-            phirs = 1*phip_arr[ialpha,nBj-1:]
-
-            phils = phils + np.flip(dbncs)
-            phirs = phirs - dbncs
-
-            phipp_arr[ialpha,:nBj] = phils
-            phipp_arr[ialpha,nBj-1:] = phirs
-
-            Bf = UnivariateSpline(phis2D[:,ialpha],B[:,ialpha],k=1,s=0)
+            if ialpha in failed_alpha:
+                if arr_out:
+                    out[si, ialpha, :] = 0
+                else:
+                    out[si, ialpha] = 0
+                continue
             try:
-                Bppf = UnivariateSpline(phipp_arr[ialpha,:],Bpps,k=1,s=0)
-            except:
-                phils = 1*phipp_arr[ialpha,:nBj]
-                phirs = 1*phipp_arr[ialpha,nBj-1:]
+                dbncs = (bncs[ialpha,:] - mbncs)/2
+                phils = 1*phip_arr[ialpha,:nBj]
+                phirs = 1*phip_arr[ialpha,nBj-1:]
 
-                for il in range(nBj-1):
-                    if phils[il+1] - phils[il] < 0:
-                        phirs[-il-2] = phirs[-il-2] + (phils[il] - phils[il+1] + 1e-12)
-                        phils[il+1] = phils[il] + 1e-12
-                    if phirs[-il-1] - phirs[-il-2] < 0:
-                        phils[il+1] = phils[il+1] + (phirs[-il-1] - phirs[-il-2] - 1e-12)
-                        phirs[-il-2] = phirs[-il-1] - 1e-12
-                
+                phils = phils + np.flip(dbncs)
+                phirs = phirs - dbncs
+
                 phipp_arr[ialpha,:nBj] = phils
                 phipp_arr[ialpha,nBj-1:] = phirs
 
-                Bppf = UnivariateSpline(phipp_arr[ialpha,:],Bpps,k=1,s=0)
+                Bf = UnivariateSpline(phis2D[:,ialpha],B[:,ialpha],k=1,s=0)
+                try:
+                    Bppf = UnivariateSpline(phipp_arr[ialpha,:],Bpps,k=1,s=0)
+                except:
+                    phils = 1*phipp_arr[ialpha,:nBj]
+                    phirs = 1*phipp_arr[ialpha,nBj-1:]
 
-            phis = np.linspace(phimin,phimax,nphi_out)
+                    for il in range(nBj-1):
+                        if phils[il+1] - phils[il] < 0:
+                            phirs[-il-2] = phirs[-il-2] + (phils[il] - phils[il+1] + 1e-12)
+                            phils[il+1] = phils[il] + 1e-12
+                        if phirs[-il-1] - phirs[-il-2] < 0:
+                            phils[il+1] = phils[il+1] + (phirs[-il-1] - phirs[-il-2] - 1e-12)
+                            phirs[-il-2] = phirs[-il-1] - 1e-12
+                    
+                    phipp_arr[ialpha,:nBj] = phils
+                    phipp_arr[ialpha,nBj-1:] = phirs
 
-            # Penalize differences between original and shuffled wells
-            denom = 1
-            pen = (Bppf(phis) - Bf(phis)) / denom
+                    Bppf = UnivariateSpline(phipp_arr[ialpha,:],Bpps,k=1,s=0)
 
-            mean_denom += np.mean(denom) / nalpha
+                phis = np.linspace(phimin,phimax,nphi_out)
 
-            if arr_out == True:
-                out[si, ialpha, :] = np.sqrt(weights[si]) * pen / np.sqrt(nphi_out)
-            else:
-                out[si, ialpha] = np.sqrt(weights[si]) * np.sqrt(np.mean(pen**2))
+                # Penalize differences between original and shuffled wells
+                denom = 1
+                pen = (Bppf(phis) - Bf(phis)) / denom
+
+                mean_denom += np.mean(denom) / nalpha
+
+                if arr_out == True:
+                    out[si, ialpha, :] = np.sqrt(weights[si]) * pen / np.sqrt(nphi_out)
+                else:
+                    out[si, ialpha] = np.sqrt(weights[si]) * np.sqrt(np.mean(pen**2))
+            except Exception as e:
+                # print(f"[WARN] residual calc failed at ialpha={ialpha}: {e}")
+                failed_alpha.append(ialpha)
+                if arr_out:
+                    out[si, ialpha, :] = 0
+                else:
+                    out[si, ialpha] = 0
+                continue
         if arr_out == True:
             out[si,:,:] = out[si,:,:] * mean_denom
         else:

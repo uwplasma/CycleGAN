@@ -11,3 +11,10 @@ GX_database_create.py
 stel_results.csv
 *.DS_Store*
 filtered_stel_results.csv
+*input.*
+*threed1*
+fort.9
+*parvmecinfo*
+stel_results_copy.csv
+.gitignore
+stel_results_restored.csv
