@@ -26,12 +26,12 @@ import shutil
 #     # tracing.plot()
 #     print(f"Final loss fraction: {tracing.loss_fractions[-1]*100:.2f}% took {time()-time0:.2f}s")
 
-def calculate_loss_fraction_SIMPLE(local_wout, stel, rank, SIMPLE_executable, SIMPLE_input, SIMPLE_output, s=0.3, trace_time=5e-3, B_aries = 5.7, A_aries = 1.7, nparticles=1000):
+def calculate_loss_fraction_SIMPLE(local_wout, stel, rank, SIMPLE_executable, SIMPLE_input, SIMPLE_output, s=0.3, trace_time=5e-3, B_aries = 5.7, A_aries = 1.7, nparticles=2000):
     if not os.path.exists(SIMPLE_output):
         SIMPLE_input_to_use = 'simple.in'
         
         current_dir = os.getcwd()
-        rank_dir = f"rank_{rank}"
+        rank_dir = f"ranks/rank_{rank}"
         os.makedirs(rank_dir, exist_ok=True)
         os.chdir(rank_dir)
         

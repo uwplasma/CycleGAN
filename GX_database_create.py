@@ -100,28 +100,16 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     SIMPLE_output = os.path.join(wouts_dir, f"simple_output_{eq_filename}.dat")
     loss_fraction, loss_fraction_times = calculate_loss_fraction_SIMPLE(local_wout=local_wout, stel=stel, SIMPLE_output=SIMPLE_output,
                                                     SIMPLE_executable=SIMPLE_executable, SIMPLE_input=SIMPLE_input, rank=rank)
+    loss_fraction_1em5 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-5))]
     loss_fraction_1em4 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-4))]
     loss_fraction_1em3 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-3))]
     loss_fraction_5em3 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 5e-3))]
-    print(f"[Rank {rank}] Loss fraction at 1e-4 = {loss_fraction_1em4}, at 1e-3 = {loss_fraction_1em3} and at 5e-3 = {loss_fraction_5em3}. Calculation took {time()-start_time:.2f} seconds")
-    # import matplotlib.pyplot as plt
-    # plt.figure(figsize=(8, 5))
-    # plt.plot(loss_fraction_times, loss_fraction, linewidth=2, label='Loss Fraction')
-    # plt.yscale('log')
-    # plt.xscale('log')
-    # plt.ylim(bottom=1e-4, top=1)
-    # plt.xlim(left=1e-6)
-    # plt.xlabel('Time [s]')
-    # plt.ylabel('Loss Fraction')
-    # plt.grid(True)
-    # plt.legend()
-    # plt.tight_layout()
-    # plt.show()
-    # exit()
+    print(f"[Rank {rank}] Loss fraction at 1e-5 = {loss_fraction_1em5}, at 1e-4 = {loss_fraction_1em4}, at 1e-3 = {loss_fraction_1em3} and at 5e-3 = {loss_fraction_5em3}. Calculation took {time()-start_time:.2f} seconds")
+
     stru = RedlGeomVmec(vmec=stel, surfaces=[0.001,0.5])()
 
     results = [qa, qh, qp, qi, stru.G[0], stru.f_t[0], stru.f_t[1],
-               loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3,
+               loss_fraction_1em5, loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3,
                stel.iota_axis(), stel.iota_edge(), stel.mean_iota(), stel.mean_shear(),
                stel.vacuum_well(), np.max(MaxElongationPen(stel)),
                (stru.Bmax[0]-stru.Bmin[0])/(stru.Bmax[0]+stru.Bmin[0]), (stru.Bmax[1]-stru.Bmin[1])/(stru.Bmax[1]+stru.Bmin[1]), #MirrorRatioPen(stel),
@@ -143,7 +131,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
 
     all_columns = (
         ['qa', 'qh', 'qp', 'qi', 'Boozer_G', 'trapped_fraction_axis', 'trapped_fraction_s0.5',
-         'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s',
+         'loss_fraction_1e-5s', 'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s',
          'iota_axis', 'iota_edge', 'mean_iota', 'mean_shear', 'well', 'max_elongation',
          'mirror_ratio_axis', 'mirror_ratio_s0.5', 'Dmerc_min', 'Dmerc_max', 'Aminor', 'Rmajor', 'volume', 'betatotal', 'betaxis',
          'volavgB', 'phiedge', 'FSA_grad_xs'] +
