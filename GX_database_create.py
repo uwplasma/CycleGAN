@@ -7,11 +7,13 @@ import tracemalloc
 import numpy as np
 import pandas as pd
 
-from tqdm.auto import tqdm
+from time import time
 from mpi4py import MPI
 from desc.io import load
+from tqdm.auto import tqdm
 from desc.vmec import VMECIO
-from extra_objectives import calculate_loss_fraction
+from extra_objectives import calculate_loss_fraction_SIMPLE
+from simsopt.mhd import RedlGeomVmec
 from simsopt.mhd import Vmec, vmec_compute_geometry, QuasisymmetryRatioResidual
 from qi_functions import MaxElongationPen, QuasiIsodynamicResidual, MirrorRatioPen
 import shutil
@@ -23,6 +25,8 @@ data_folder = "20250119-01-gyrokinetics_machine_learning_zenodo/data_generation_
 h5_path = os.path.join(GX_zenodo_dir, "20250102-01_GX_stellarator_dataset.h5")
 csv_path = os.path.join(CycleGAN_dir, "stel_results.csv")
 wouts_dir = os.path.join(CycleGAN_dir,"wouts")
+SIMPLE_executable = '/Users/rogeriojorge/local/SIMPLE/build/simple.x'
+SIMPLE_input = os.path.join(CycleGAN_dir, "simple_full.in")
 os.makedirs(wouts_dir, exist_ok=True)
 
 comm = MPI.COMM_WORLD
@@ -86,18 +90,43 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     s_targets_qi = [1/16, 5/16, 9/16]
     try: qi = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
     except Exception as e: qi = np.nan;print(f"[Rank {rank}] Error calculating qi at index {i}: {e}"); 
+    if qi == 0.0: qi = np.nan
 
     geom = vmec_compute_geometry(stel, s=1, theta=np.linspace(0, 2*np.pi, 50), phi=np.linspace(0, 2*np.pi, 150))
     L_grad_B_max = np.max(geom.L_grad_B)
     L_grad_B_min = np.min(geom.L_grad_B)
     
-    # loss_fraction = calculate_loss_fraction(local_wout, stel)
+    start_time = time()
+    SIMPLE_output = os.path.join(wouts_dir, f"simple_output_{eq_filename}.dat")
+    loss_fraction, loss_fraction_times = calculate_loss_fraction_SIMPLE(local_wout=local_wout, stel=stel, SIMPLE_output=SIMPLE_output,
+                                                    SIMPLE_executable=SIMPLE_executable, SIMPLE_input=SIMPLE_input, rank=rank)
+    loss_fraction_1em4 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-4))]
+    loss_fraction_1em3 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-3))]
+    loss_fraction_5em3 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 5e-3))]
+    print(f"[Rank {rank}] Loss fraction at 1e-4 = {loss_fraction_1em4}, at 1e-3 = {loss_fraction_1em3} and at 5e-3 = {loss_fraction_5em3}. Calculation took {time()-start_time:.2f} seconds")
+    # import matplotlib.pyplot as plt
+    # plt.figure(figsize=(8, 5))
+    # plt.plot(loss_fraction_times, loss_fraction, linewidth=2, label='Loss Fraction')
+    # plt.yscale('log')
+    # plt.xscale('log')
+    # plt.ylim(bottom=1e-4, top=1)
+    # plt.xlim(left=1e-6)
+    # plt.xlabel('Time [s]')
+    # plt.ylabel('Loss Fraction')
+    # plt.grid(True)
+    # plt.legend()
+    # plt.tight_layout()
+    # plt.show()
+    # exit()
+    stru = RedlGeomVmec(vmec=stel, surfaces=[0.001,0.5])()
 
-    results = [qa, qh, qp, qi,# loss_fraction,
-        stel.iota_axis(), stel.iota_edge(), stel.mean_iota(), stel.mean_shear(),
-        stel.vacuum_well(), np.max(MaxElongationPen(stel)), MirrorRatioPen(stel),
-        np.min(stel.wout.DMerc[4:]), np.max(stel.wout.DMerc[4:]),
-        stel.volume(), stel.wout.betatotal, stel.wout.phi[-1], FSA_grad_xs[i]]
+    results = [qa, qh, qp, qi, stru.G[0], stru.f_t[0], stru.f_t[1],
+               loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3,
+               stel.iota_axis(), stel.iota_edge(), stel.mean_iota(), stel.mean_shear(),
+               stel.vacuum_well(), np.max(MaxElongationPen(stel)),
+               (stru.Bmax[0]-stru.Bmin[0])/(stru.Bmax[0]+stru.Bmin[0]), (stru.Bmax[1]-stru.Bmin[1])/(stru.Bmax[1]+stru.Bmin[1]), #MirrorRatioPen(stel),
+               np.min(stel.wout.DMerc[4:]), np.max(stel.wout.DMerc[4:]), stel.wout.Aminor_p, stel.wout.Rmajor_p,
+               stel.volume(), stel.wout.betatotal, stel.wout.betaxis, stel.wout.volavgB, stel.wout.phi[-1], FSA_grad_xs[i]]
 
     for key in fixed_data: results.append(fixed_data[key][i])
     for key in varied_data: results.append(varied_data[key][i])
@@ -113,9 +142,11 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     results += list(scalar_feature_matrix[i])
 
     all_columns = (
-        ['qa', 'qh', 'qp', 'qi',# 'loss_fraction',
-         'iota_axis', 'iota_edge', 'mean_iota', 'mean_shear', 'well', 'elongation',
-         'mirror', 'Dmerc_min', 'Dmerc_max', 'volume', 'betatotal', 'phiedge', 'FSA_grad_xs'] +
+        ['qa', 'qh', 'qp', 'qi', 'Boozer_G', 'trapped_fraction_axis', 'trapped_fraction_s0.5',
+         'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s',
+         'iota_axis', 'iota_edge', 'mean_iota', 'mean_shear', 'well', 'max_elongation',
+         'mirror_ratio_axis', 'mirror_ratio_s0.5', 'Dmerc_min', 'Dmerc_max', 'Aminor', 'Rmajor', 'volume', 'betatotal', 'betaxis',
+         'volavgB', 'phiedge', 'FSA_grad_xs'] +
         [f"fixed_grad_{k}" for k in fixed_data] +
         [f"varied_grad_{k}" for k in varied_data] +
         ['L_grad_B_max', 'L_grad_B_min'] +

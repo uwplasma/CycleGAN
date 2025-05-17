@@ -18,3 +18,5 @@ fort.9
 stel_results_copy.csv
 .gitignore
 stel_results_restored.csv
+extra_objectives.py
+stel_results_old.csv
