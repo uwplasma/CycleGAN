@@ -22,7 +22,7 @@ import shutil
 # === Paths ===
 HOME_DIR = os.path.join(os.environ.get("HOME", os.path.expanduser("~")), "local")
 SCRATCH_DIR = os.environ.get("SCRATCH")
-GX_zenodo_dir = os.path.join(HOME_DIR,"GX_stellarator_zenodo")
+GX_zenodo_dir = os.path.join(SCRATCH_DIR,"GX_stellarator_zenodo")
 CycleGAN_dir = os.path.join(SCRATCH_DIR,"CycleGAN")
 SIMPLE_executable = os.path.join(HOME_DIR,"SIMPLE","build","simple.x")
 data_folder = "20250119-01-gyrokinetics_machine_learning_zenodo/data_generation_and_analysis"
@@ -85,6 +85,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
         # os.chdir(current_dir)
     stel = Vmec(local_wout, verbose=False)
     
+    start_time = time()
     obj = QuasisymmetryTripleProduct(eq=eq);obj.build(verbose=0);qs_tp=obj.compute_scalar(*obj.xs(eq))
     # print(f"[Rank {rank}] Quasisymmetry Triple Product: {qs_tp}")
     obj = EffectiveRipple(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple=obj.compute(*obj.xs(eq))[0]
@@ -93,6 +94,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     # print(f"[Rank {rank}] Gamma C: {gamma_c}")
     obj = Isodynamicity(eq=eq);obj.build(verbose=0);isodynamicity=obj.compute_scalar(*obj.xs(eq))
     # print(f"[Rank {rank}] Isodynamicity: {isodynamicity}")
+    print(f"[Rank {rank}] Time taken for DESC objectives: {time()-start_time:.2f} seconds")
 
     s_targets_qs = np.linspace(0, 1, 5)
     qa = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=0).residuals()**2)
