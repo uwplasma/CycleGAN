@@ -16,7 +16,7 @@ from extra_objectives import calculate_loss_fraction_SIMPLE
 from simsopt.mhd import RedlGeomVmec
 from simsopt.mhd import Vmec, vmec_compute_geometry, QuasisymmetryRatioResidual
 from qi_functions import MaxElongationPen, QuasiIsodynamicResidual
-from desc.objectives import (QuasisymmetryTripleProduct, BScaleLength, EffectiveRipple, GammaC, Isodynamicity)
+from desc.objectives import QuasisymmetryTripleProduct, EffectiveRipple, GammaC, Isodynamicity
 import shutil
 
 # === Paths ===
@@ -86,15 +86,13 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     stel = Vmec(local_wout, verbose=False)
     
     obj = QuasisymmetryTripleProduct(eq=eq);obj.build(verbose=0);qs_tp=obj.compute_scalar(*obj.xs(eq))
-    # print(f"Quasisymmetry Triple Product: {qs_tp}")
-    obj = BScaleLength(eq=eq, normalize=False);obj.build(verbose=0);b_scale_length=obj.compute_scalar(*obj.xs(eq))
-    # print(f"B Scale Length: {b_scale_length}")
-    obj = EffectiveRipple(eq=eq);obj.build(verbose=0);effective_ripple=obj.compute_scalar(*obj.xs(eq))
-    # print(f"Effective Ripple: {effective_ripple}")
-    obj = GammaC(eq=eq);obj.build(verbose=0);gamma_c=obj.compute_scalar(*obj.xs(eq))
-    # print(f"Gamma C: {gamma_c}")
+    # print(f"[Rank {rank}] Quasisymmetry Triple Product: {qs_tp}")
+    obj = EffectiveRipple(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple=obj.compute(*obj.xs(eq))[0]
+    # print(f"[Rank {rank}] Effective Ripple: {effective_ripple}")
+    obj = GammaC(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c=obj.compute(*obj.xs(eq))[0]
+    # print(f"[Rank {rank}] Gamma C: {gamma_c}")
     obj = Isodynamicity(eq=eq);obj.build(verbose=0);isodynamicity=obj.compute_scalar(*obj.xs(eq))
-    # print(f"Isodynamicity: {isodynamicity}")
+    # print(f"[Rank {rank}] Isodynamicity: {isodynamicity}")
 
     s_targets_qs = np.linspace(0, 1, 5)
     qa = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=0).residuals()**2)
@@ -103,7 +101,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     
     s_targets_qi = [1/16, 5/16, 9/16]
     try: qi = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
-    except Exception as e: qi = np.nan;print(f"[Rank {rank}] Error calculating qi at index {i}: {e}"); 
+    except Exception as e: qi = np.nan;print(f"[Rank {rank}] Error calculating qi at index {i}: {e}") 
     if qi == 0.0: qi = np.nan
 
     geom = vmec_compute_geometry(stel, s=1, theta=np.linspace(0, 2*np.pi, 50), phi=np.linspace(0, 2*np.pi, 150))
@@ -123,7 +121,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     stru = RedlGeomVmec(vmec=stel, surfaces=[0.001,0.5])()
 
     results = [qa, qh, qp, qi, stru.G[0], stru.f_t[0], stru.f_t[1],
-               qs_tp, b_scale_length, effective_ripple, gamma_c, isodynamicity, elongation,
+               qs_tp, effective_ripple, gamma_c, isodynamicity,
                loss_fraction_3em5, loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3,
                stel.iota_axis(), stel.iota_edge(), stel.mean_iota(), stel.mean_shear(),
                stel.vacuum_well(), np.max(MaxElongationPen(stel)),
@@ -146,7 +144,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
 
     all_columns = (
         ['qa', 'qh', 'qp', 'qi', 'Boozer_G', 'trapped_fraction_axis', 'trapped_fraction_s0.5',
-         'qs_triple_product', 'b_scale_length', 'effective_ripple', 'gamma_c', 'isodynamicity', 'elongation',
+         'qs_triple_product', 'effective_ripple', 'gamma_c', 'isodynamicity',
          'loss_fraction_3e-5s', 'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s',
          'iota_axis', 'iota_edge', 'mean_iota', 'mean_shear', 'well', 'max_elongation',
          'mirror_ratio_axis', 'mirror_ratio_s0.5', 'Dmerc_min', 'Dmerc_max', 'Aminor', 'Rmajor', 'volume', 'betatotal', 'betaxis',
