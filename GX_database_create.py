@@ -60,14 +60,41 @@ def load_static_data():
         varied_data = {key: f[f"/varied_gradient_simulations/{key}"][()] for key in fixed_keys}
     return eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data
 
-# compute_DESC_objectives(eq_relpath, eq):
-#     csv_path
-    
-#     if eq_relpath in csv_path:
-#         qa = X
-#     else:
+def compute_DESC_QI_objectives(eq_filename, eq, rank, stel):
+    def compute_objectives(eq, rank, stel):
+        start_time = time()
+        obj = QuasisymmetryTripleProduct(eq=eq);obj.build(verbose=0);qs_tp=obj.compute_scalar(*obj.xs(eq))
+        # print(f"[Rank {rank}] Quasisymmetry Triple Product: {qs_tp}")
+        obj = EffectiveRipple(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple=obj.compute(*obj.xs(eq))[0]
+        # print(f"[Rank {rank}] Effective Ripple: {effective_ripple}")
+        obj = GammaC(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c=obj.compute(*obj.xs(eq))[0]
+        # print(f"[Rank {rank}] Gamma C: {gamma_c}")
+        obj = Isodynamicity(eq=eq);obj.build(verbose=0);isodynamicity=obj.compute_scalar(*obj.xs(eq))
+        # print(f"[Rank {rank}] Isodynamicity: {isodynamicity}")
+        print(f"[Rank {rank}] Time taken for DESC objectives: {time()-start_time:.2f} seconds")
         
+        s_targets_qi = [1/16, 5/16, 9/16]
+        try: qi = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
+        except Exception as e: qi = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
+        if qi == 0.0: qi = np.nan
+        
+        return qs_tp, effective_ripple, gamma_c, isodynamicity, qi
     
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        match = df[df["file"] == eq_filename]
+        if not match.empty:
+            print(f"[Rank {rank}] Found existing data for {eq_filename}. Using it.")
+            qs_tp = match.iloc[0]["qs_triple_product"]
+            effective_ripple = match.iloc[0]["effective_ripple"]
+            gamma_c = match.iloc[0]["gamma_c"]
+            isodynamicity = match.iloc[0]["isodynamicity"]
+            qi = match.iloc[0]["qi"]
+            return qs_tp, effective_ripple, gamma_c, isodynamicity, qi
+        else:
+            return compute_objectives(eq, rank, stel)
+    else:
+        return compute_objectives(eq, rank, stel)
 
 def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data):
     eq_path = os.path.join(GX_zenodo_dir, data_folder, eq_relpath)
@@ -94,27 +121,12 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
         # os.chdir(current_dir)
     stel = Vmec(local_wout, verbose=False)
     
-    
-    start_time = time()
-    obj = QuasisymmetryTripleProduct(eq=eq);obj.build(verbose=0);qs_tp=obj.compute_scalar(*obj.xs(eq))
-    # print(f"[Rank {rank}] Quasisymmetry Triple Product: {qs_tp}")
-    obj = EffectiveRipple(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple=obj.compute(*obj.xs(eq))[0]
-    # print(f"[Rank {rank}] Effective Ripple: {effective_ripple}")
-    obj = GammaC(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c=obj.compute(*obj.xs(eq))[0]
-    # print(f"[Rank {rank}] Gamma C: {gamma_c}")
-    obj = Isodynamicity(eq=eq);obj.build(verbose=0);isodynamicity=obj.compute_scalar(*obj.xs(eq))
-    # print(f"[Rank {rank}] Isodynamicity: {isodynamicity}")
-    print(f"[Rank {rank}] Time taken for DESC objectives: {time()-start_time:.2f} seconds")
+    qs_tp, effective_ripple, gamma_c, isodynamicity, qi = compute_DESC_QI_objectives(eq_filename, eq, rank, stel)
 
     s_targets_qs = np.linspace(0, 1, 5)
     qa = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=0).residuals()**2)
     qh = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=-1).residuals()**2)
     qp = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=0, helicity_n=1).residuals()**2)
-    
-    s_targets_qi = [1/16, 5/16, 9/16]
-    try: qi = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
-    except Exception as e: qi = np.nan;print(f"[Rank {rank}] Error calculating qi at index {i}: {e}") 
-    if qi == 0.0: qi = np.nan
 
     geom = vmec_compute_geometry(stel, s=1, theta=np.linspace(0, 2*np.pi, 50), phi=np.linspace(0, 2*np.pi, 150))
     L_grad_B_max = np.max(geom.L_grad_B)
@@ -174,7 +186,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     cols = ["file"] + [col for col in df_row.columns if col != "file"]
     df_row = df_row[cols]
     
-    del stel, results, eq, surf, obj
+    del stel, results, eq, surf
     
     return df_row
 
