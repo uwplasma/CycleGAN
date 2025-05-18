@@ -25,7 +25,7 @@ SCRATCH_DIR = os.environ.get("SCRATCH")
 GX_zenodo_dir = os.path.join(SCRATCH_DIR,"GX_stellarator_zenodo")
 CycleGAN_dir = os.path.join(SCRATCH_DIR,"CycleGAN")
 SIMPLE_executable = os.path.join(HOME_DIR,"SIMPLE","build","simple.x")
-data_folder = "20250119-01-gyrokinetics_machine_learning_zenodo/data_generation_and_analysis"
+data_folder = "data_generation_and_analysis"
 h5_path = os.path.join(GX_zenodo_dir, "20250102-01_GX_stellarator_dataset.h5")
 csv_path = os.path.join(CycleGAN_dir, "stel_results.csv")
 wouts_dir = os.path.join(CycleGAN_dir,"wouts")
@@ -60,6 +60,15 @@ def load_static_data():
         varied_data = {key: f[f"/varied_gradient_simulations/{key}"][()] for key in fixed_keys}
     return eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data
 
+# compute_DESC_objectives(eq_relpath, eq):
+#     csv_path
+    
+#     if eq_relpath in csv_path:
+#         qa = X
+#     else:
+        
+    
+
 def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data):
     eq_path = os.path.join(GX_zenodo_dir, data_folder, eq_relpath)
     eq_filename = os.path.basename(eq_relpath).replace(".h5", "")
@@ -84,6 +93,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
         # os.remove(local_wout.replace(".nc", "").replace("wout_", "threed1."))
         # os.chdir(current_dir)
     stel = Vmec(local_wout, verbose=False)
+    
     
     start_time = time()
     obj = QuasisymmetryTripleProduct(eq=eq);obj.build(verbose=0);qs_tp=obj.compute_scalar(*obj.xs(eq))
