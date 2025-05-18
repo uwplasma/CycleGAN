@@ -15,17 +15,20 @@ from desc.vmec import VMECIO
 from extra_objectives import calculate_loss_fraction_SIMPLE
 from simsopt.mhd import RedlGeomVmec
 from simsopt.mhd import Vmec, vmec_compute_geometry, QuasisymmetryRatioResidual
-from qi_functions import MaxElongationPen, QuasiIsodynamicResidual, MirrorRatioPen
+from qi_functions import MaxElongationPen, QuasiIsodynamicResidual
+from desc.objectives import (QuasisymmetryTripleProduct, BScaleLength, EffectiveRipple, GammaC, Isodynamicity)
 import shutil
 
 # === Paths ===
-GX_zenodo_dir = "/Users/rogeriojorge/Downloads/GX_stellarator_zenodo"
-CycleGAN_dir = "/Users/rogeriojorge/local/CycleGAN"
+HOME_DIR = os.path.join(os.environ.get("HOME", os.path.expanduser("~")), "local")
+SCRATCH_DIR = os.environ.get("SCRATCH")
+GX_zenodo_dir = os.path.join(HOME_DIR,"GX_stellarator_zenodo")
+CycleGAN_dir = os.path.join(SCRATCH_DIR,"CycleGAN")
+SIMPLE_executable = os.path.join(HOME_DIR,"SIMPLE","build","simple.x")
 data_folder = "20250119-01-gyrokinetics_machine_learning_zenodo/data_generation_and_analysis"
 h5_path = os.path.join(GX_zenodo_dir, "20250102-01_GX_stellarator_dataset.h5")
 csv_path = os.path.join(CycleGAN_dir, "stel_results.csv")
 wouts_dir = os.path.join(CycleGAN_dir,"wouts")
-SIMPLE_executable = '/Users/rogeriojorge/local/SIMPLE/build/simple.x'
 SIMPLE_input = os.path.join(CycleGAN_dir, "simple_full.in")
 os.makedirs(wouts_dir, exist_ok=True)
 
@@ -62,11 +65,12 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     eq_filename = os.path.basename(eq_relpath).replace(".h5", "")
     local_wout = os.path.join(wouts_dir, f"wout_{eq_filename}.nc")
     
-    # Only load and save the equilibrium if it hasn't been processed yet
+    eq = load(eq_path)
+    # eq.change_resolution(M=4, N=4)
+    # eq.surface = eq.get_surface_at(rho=1.0)
+    
+    # Only save the equilibrium if it hasn't been processed yet
     if not os.path.exists(local_wout):
-        eq = load(eq_path)
-        # eq.change_resolution(M=4, N=4)
-        # eq.surface = eq.get_surface_at(rho=1.0)
         VMECIO.save(eq, local_wout, verbose=0)
         # current_dir = os.getcwd()
         # os.chdir(wouts_dir)
@@ -79,8 +83,18 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
         # shutil.move(stel.input_file+'_000_000000',local_vmec_input)
         # os.remove(local_wout.replace(".nc", "").replace("wout_", "threed1."))
         # os.chdir(current_dir)
-        del eq
     stel = Vmec(local_wout, verbose=False)
+    
+    obj = QuasisymmetryTripleProduct(eq=eq);obj.build(verbose=0);qs_tp=obj.compute_scalar(*obj.xs(eq))
+    # print(f"Quasisymmetry Triple Product: {qs_tp}")
+    obj = BScaleLength(eq=eq, normalize=False);obj.build(verbose=0);b_scale_length=obj.compute_scalar(*obj.xs(eq))
+    # print(f"B Scale Length: {b_scale_length}")
+    obj = EffectiveRipple(eq=eq);obj.build(verbose=0);effective_ripple=obj.compute_scalar(*obj.xs(eq))
+    # print(f"Effective Ripple: {effective_ripple}")
+    obj = GammaC(eq=eq);obj.build(verbose=0);gamma_c=obj.compute_scalar(*obj.xs(eq))
+    # print(f"Gamma C: {gamma_c}")
+    obj = Isodynamicity(eq=eq);obj.build(verbose=0);isodynamicity=obj.compute_scalar(*obj.xs(eq))
+    # print(f"Isodynamicity: {isodynamicity}")
 
     s_targets_qs = np.linspace(0, 1, 5)
     qa = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=0).residuals()**2)
@@ -100,16 +114,17 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     SIMPLE_output = os.path.join(wouts_dir, f"simple_output_{eq_filename}.dat")
     loss_fraction, loss_fraction_times = calculate_loss_fraction_SIMPLE(local_wout=local_wout, stel=stel, SIMPLE_output=SIMPLE_output,
                                                     SIMPLE_executable=SIMPLE_executable, SIMPLE_input=SIMPLE_input, rank=rank)
-    loss_fraction_1em5 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-5))]
+    loss_fraction_3em5 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 3e-5))]
     loss_fraction_1em4 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-4))]
     loss_fraction_1em3 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-3))]
     loss_fraction_5em3 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 5e-3))]
-    print(f"[Rank {rank}] Loss fraction at 1e-5 = {loss_fraction_1em5}, at 1e-4 = {loss_fraction_1em4}, at 1e-3 = {loss_fraction_1em3} and at 5e-3 = {loss_fraction_5em3}. Calculation took {time()-start_time:.2f} seconds")
+    print(f"[Rank {rank}] Loss fraction at 3e-5 = {loss_fraction_3em5}, at 1e-4 = {loss_fraction_1em4}, at 1e-3 = {loss_fraction_1em3} and at 5e-3 = {loss_fraction_5em3}. Calculation took {time()-start_time:.2f} seconds")
 
     stru = RedlGeomVmec(vmec=stel, surfaces=[0.001,0.5])()
 
     results = [qa, qh, qp, qi, stru.G[0], stru.f_t[0], stru.f_t[1],
-               loss_fraction_1em5, loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3,
+               qs_tp, b_scale_length, effective_ripple, gamma_c, isodynamicity, elongation,
+               loss_fraction_3em5, loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3,
                stel.iota_axis(), stel.iota_edge(), stel.mean_iota(), stel.mean_shear(),
                stel.vacuum_well(), np.max(MaxElongationPen(stel)),
                (stru.Bmax[0]-stru.Bmin[0])/(stru.Bmax[0]+stru.Bmin[0]), (stru.Bmax[1]-stru.Bmin[1])/(stru.Bmax[1]+stru.Bmin[1]), #MirrorRatioPen(stel),
@@ -131,7 +146,8 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
 
     all_columns = (
         ['qa', 'qh', 'qp', 'qi', 'Boozer_G', 'trapped_fraction_axis', 'trapped_fraction_s0.5',
-         'loss_fraction_1e-5s', 'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s',
+         'qs_triple_product', 'b_scale_length', 'effective_ripple', 'gamma_c', 'isodynamicity', 'elongation',
+         'loss_fraction_3e-5s', 'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s',
          'iota_axis', 'iota_edge', 'mean_iota', 'mean_shear', 'well', 'max_elongation',
          'mirror_ratio_axis', 'mirror_ratio_s0.5', 'Dmerc_min', 'Dmerc_max', 'Aminor', 'Rmajor', 'volume', 'betatotal', 'betaxis',
          'volavgB', 'phiedge', 'FSA_grad_xs'] +
@@ -148,7 +164,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     cols = ["file"] + [col for col in df_row.columns if col != "file"]
     df_row = df_row[cols]
     
-    del stel, results
+    del stel, results, eq, surf, obj
     
     return df_row
 
