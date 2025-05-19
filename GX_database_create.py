@@ -65,13 +65,9 @@ def compute_DESC_QI_objectives(eq_filename, eq, rank, stel):
     def compute_objectives(eq, rank, stel):
         start_time = time()
         obj = QuasisymmetryTripleProduct(eq=eq);obj.build(verbose=0);qs_tp=obj.compute_scalar(*obj.xs(eq))
-        # print(f"[Rank {rank}] Quasisymmetry Triple Product: {qs_tp}")
         obj = EffectiveRipple(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple=obj.compute(*obj.xs(eq))[0]
-        # print(f"[Rank {rank}] Effective Ripple: {effective_ripple}")
         obj = GammaC(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c=obj.compute(*obj.xs(eq))[0]
-        # print(f"[Rank {rank}] Gamma C: {gamma_c}")
         obj = Isodynamicity(eq=eq);obj.build(verbose=0);isodynamicity=obj.compute_scalar(*obj.xs(eq))
-        # print(f"[Rank {rank}] Isodynamicity: {isodynamicity}")
         print(f"[Rank {rank}] Time taken for DESC objectives: {time()-start_time:.2f} seconds")
         
         s_targets_qi = [1/16, 5/16, 9/16]
