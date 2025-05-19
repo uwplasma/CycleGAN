@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH --qos=regular
+#SBATCH --time=24:0:0
+#SBATCH --nodes=20
+#SBATCH --ntasks-per-node=16
+#SBATCH --cpus-per-task=16
+#SBATCH --constraint=cpu
+#SBATCH -J GX_database
+#SBATCH --mail-user=rogerio.jorge@wisc.edu
+#SBATCH --mail-type=ALL
+
+export OMP_PROC_BIND=spread
+export OMP_PLACES=threads
+export OMP_NUM_THREADS=16
+
+srun --cpu-bind=cores python /pscratch/sd/r/rjorge/CycleGAN/GX_database_create.py
