@@ -1,8 +1,10 @@
 import re
-import numpy as np
-import subprocess
 import os
 import shutil
+import subprocess
+import numpy as np
+from datetime import datetime
+
 # from time import time
 # from essos.fields import Vmec as EssosVmec
 # from essos.dynamics import Tracing, Particles
@@ -31,7 +33,8 @@ def calculate_loss_fraction_SIMPLE(local_wout, stel, rank, SIMPLE_executable, SI
         SIMPLE_input_to_use = 'simple.in'
         
         current_dir = os.getcwd()
-        rank_dir = f"ranks/rank_{rank}"
+        # rank_dir = f"ranks/rank_{rank}"
+        rank_dir = f'simple_temp_files/rank_{rank}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
         os.makedirs(rank_dir, exist_ok=True)
         os.chdir(rank_dir)
         
