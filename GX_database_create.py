@@ -3,6 +3,7 @@ import re
 import gc
 import h5py
 import psutil
+import random
 import tracemalloc
 import numpy as np
 import pandas as pd
@@ -160,7 +161,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     results += [L_grad_B_max, L_grad_B_min]
 
     surf = stel.boundary
-    surf.change_resolution(mpol=8, ntor=8) # Force every surface to have the same resolution
+    surf.change_resolution(mpol=4, ntor=4) # Force every surface to have the same resolution
     mode_names = [f"rbc_{int(m.group(2))}_{int(m.group(3))}" if m.group(1) == "rc" else f"zbs_{int(m.group(2))}_{int(m.group(3))}"
                   for name in surf.dof_names if (m := re.search(r":(rc|zs)\(([-\d]+),([-\d]+)\)", name))]
     results += list(surf.x)
@@ -191,6 +192,34 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     
     return df_row
 
+def is_duplicate_row(existing_df: pd.DataFrame, new_row: pd.Series, tol: float = 1e-6) -> bool:
+    # Align row to match existing_df columns
+    new_row = new_row[existing_df.columns]
+
+    # Identify numeric and non-numeric columns
+    numeric_cols = existing_df.select_dtypes(include=[np.number]).columns
+    other_cols = [col for col in existing_df.columns if col not in numeric_cols]
+
+    # Convert both to float to ensure compatibility
+    try:
+        existing_numeric = existing_df[numeric_cols].astype(float).values
+        row_numeric = new_row[numeric_cols].astype(float).values
+    except Exception as e:
+        raise ValueError(f"Numeric conversion failed: {e}")
+
+    # Compare numeric values within tolerance
+    numeric_match = np.all(np.isclose(existing_numeric, row_numeric, atol=tol, rtol=0), axis=1)
+
+    # Compare non-numeric columns exactly
+    if other_cols:
+        existing_others = existing_df[other_cols].astype(str).values
+        row_others = new_row[other_cols].astype(str).values
+        other_match = np.all(existing_others == row_others, axis=1)
+    else:
+        other_match = np.full(len(existing_df), True)
+
+    return np.any(numeric_match & other_match)
+
 def main():
     tracemalloc.start()
     if rank==0: memory_report("Start")
@@ -204,6 +233,7 @@ def main():
     my_indices = [i for i in range(rank * files_per_rank, (rank + 1) * files_per_rank)]
     # If the division isn't perfect, last rank gets the remaining files
     if rank == size - 1: my_indices.extend(range(size * files_per_rank, num_files))
+    random.shuffle(my_indices)
 
     # === Main loop for processing ===
     stel_ind = 0
@@ -215,8 +245,18 @@ def main():
         try:
             memory_report(f"#{stel_ind+1}/{len(my_indices)}:{i+1}: {eq_relpath[12:]}")
             df_row = process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data)
-            if not os.path.exists(csv_path): df_row.to_csv(csv_path, mode='w', header=True, index=False)
-            else: df_row.to_csv(csv_path, mode='a', header=False, index=False)
+            if not os.path.exists(csv_path):
+                df_row.to_csv(csv_path, mode='w', header=True, index=False)
+            else:
+                try:
+                    if not is_duplicate_row(pd.read_csv(csv_path), df_row.iloc[0], tol=1e-6):
+                        print(f"[Rank {rank}] Writing new row to CSV")
+                        df_row.to_csv(csv_path, mode='a', header=False, index=False)
+                    else:
+                        if rank == 0:
+                            print(f"[Rank {rank}] Skipping duplicate row")
+                except Exception as e:
+                    print(f"[Rank {rank}] Error checking for duplicate row: {e}")
         except Exception as e: print(f"[Rank {rank}] ERROR at index {i}: {e}")
         gc.collect()
         stel_ind += 1
