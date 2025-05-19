@@ -84,7 +84,7 @@ def compute_DESC_QI_objectives(eq_filename, eq, rank, stel):
         df = pd.read_csv(csv_path)
         match = df[df["file"] == eq_filename]
         if not match.empty:
-            print(f"[Rank {rank}] Found existing data for {eq_filename}. Using it.")
+            # print(f"[Rank {rank}] Found existing data for {eq_filename}. Using it.")
             qs_tp = match.iloc[0]["qs_triple_product"]
             effective_ripple = match.iloc[0]["effective_ripple"]
             gamma_c = match.iloc[0]["gamma_c"]
@@ -140,13 +140,14 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     loss_fraction_1em4 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-4))]
     loss_fraction_1em3 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-3))]
     loss_fraction_5em3 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 5e-3))]
-    print(f"[Rank {rank}] Loss fraction at 3e-5 = {loss_fraction_3em5}, at 1e-4 = {loss_fraction_1em4}, at 1e-3 = {loss_fraction_1em3} and at 5e-3 = {loss_fraction_5em3}. Calculation took {time()-start_time:.2f} seconds")
+    loss_fraction_1em2 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-2))]
+    print(f"[Rank {rank}] Loss fraction at 3e-5 = {loss_fraction_3em5}, at 1e-4 = {loss_fraction_1em4}, at 1e-3 = {loss_fraction_1em3}, at 5e-3 = {loss_fraction_5em3} and 1e-2  = {loss_fraction_1em2}. Calculation took {time()-start_time:.2f} seconds")
 
     stru = RedlGeomVmec(vmec=stel, surfaces=[0.001,0.5])()
 
     results = [qa, qh, qp, qi, stru.G[0], stru.f_t[0], stru.f_t[1],
                qs_tp, effective_ripple, gamma_c, isodynamicity,
-               loss_fraction_3em5, loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3,
+               loss_fraction_3em5, loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3, loss_fraction_1em2,
                stel.iota_axis(), stel.iota_edge(), stel.mean_iota(), stel.mean_shear(),
                stel.vacuum_well(), np.max(MaxElongationPen(stel)),
                (stru.Bmax[0]-stru.Bmin[0])/(stru.Bmax[0]+stru.Bmin[0]), (stru.Bmax[1]-stru.Bmin[1])/(stru.Bmax[1]+stru.Bmin[1]), #MirrorRatioPen(stel),
@@ -169,7 +170,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     all_columns = (
         ['qa', 'qh', 'qp', 'qi', 'Boozer_G', 'trapped_fraction_axis', 'trapped_fraction_s0.5',
          'qs_triple_product', 'effective_ripple', 'gamma_c', 'isodynamicity',
-         'loss_fraction_3e-5s', 'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s',
+         'loss_fraction_3e-5s', 'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s', 'loss_fraction_1e-2s',
          'iota_axis', 'iota_edge', 'mean_iota', 'mean_shear', 'well', 'max_elongation',
          'mirror_ratio_axis', 'mirror_ratio_s0.5', 'Dmerc_min', 'Dmerc_max', 'Aminor', 'Rmajor', 'volume', 'betatotal', 'betaxis',
          'volavgB', 'phiedge', 'FSA_grad_xs'] +
