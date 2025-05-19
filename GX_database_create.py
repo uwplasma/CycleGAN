@@ -253,8 +253,7 @@ def main():
                         print(f"[Rank {rank}] Writing new row to CSV")
                         df_row.to_csv(csv_path, mode='a', header=False, index=False)
                     else:
-                        if rank == 0:
-                            print(f"[Rank {rank}] Skipping duplicate row")
+                        print(f"[Rank {rank}] Skipping duplicate row")
                 except Exception as e:
                     print(f"[Rank {rank}] Error checking for duplicate row: {e}")
         except Exception as e: print(f"[Rank {rank}] ERROR at index {i}: {e}")
