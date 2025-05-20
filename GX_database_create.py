@@ -13,11 +13,13 @@ from mpi4py import MPI
 from desc.io import load
 from tqdm.auto import tqdm
 from desc.vmec import VMECIO
+from desc.grid import LinearGrid
 from extra_objectives import calculate_loss_fraction_SIMPLE
 from simsopt.mhd import RedlGeomVmec
 from simsopt.mhd import Vmec, vmec_compute_geometry, QuasisymmetryRatioResidual
 from qi_functions import MaxElongationPen, QuasiIsodynamicResidual
-from desc.objectives import QuasisymmetryTripleProduct, EffectiveRipple, GammaC, Isodynamicity
+from desc.objectives import (QuasisymmetryTripleProduct, EffectiveRipple, GammaC,
+                             Isodynamicity, MagneticWell, MercierStability)
 import shutil
 
 # === Paths ===
@@ -61,48 +63,72 @@ def load_static_data():
         varied_data = {key: f[f"/varied_gradient_simulations/{key}"][()] for key in fixed_keys}
     return eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data
 
-def compute_DESC_QI_objectives(eq_filename, eq, rank, stel):
+def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
     def compute_objectives(eq, rank, stel):
         start_time = time()
-        obj = QuasisymmetryTripleProduct(eq=eq);obj.build(verbose=0);qs_tp=obj.compute_scalar(*obj.xs(eq))
-        obj = EffectiveRipple(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple=obj.compute(*obj.xs(eq))[0]
-        obj = GammaC(eq=eq, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c=obj.compute(*obj.xs(eq))[0]
-        obj = Isodynamicity(eq=eq);obj.build(verbose=0);isodynamicity=obj.compute_scalar(*obj.xs(eq))
-        print(f"[Rank {rank}] Time taken for DESC objectives: {time()-start_time:.2f} seconds")
+        grid_global           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, L=eq.L_grid, axis=False)
+        grid_global_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  L=eq.L_grid, axis=False)
+        obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_global);obj.build(verbose=0);qs_tp_global=obj.compute_scalar(*obj.xs(eq))
+        obj = Isodynamicity(             eq=eq, grid=grid_global);obj.build(verbose=0);isodynamicity_global=obj.compute_scalar(*obj.xs(eq))
+        obj = EffectiveRipple(           eq=eq, grid=grid_global_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple_global=obj.compute_scalar(*obj.xs(eq))
+        obj = GammaC(                    eq=eq, grid=grid_global_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c_global=obj.compute_scalar(*obj.xs(eq))
+        obj = MercierStability(eq=eq, grid=grid_global);obj.build(verbose=0);mercier_stability_global=obj.compute(*obj.xs(eq))
+        DMerc_min = np.min(mercier_stability_global);DMerc_max = np.max(mercier_stability_global)
+        print(f"[Rank {rank}] Time taken for DESC global objectives: {time()-start_time:.2f} seconds")
+
+        grid_this_rho           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, rho=rho)
+        grid_this_rho_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  rho=rho)
+        obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_this_rho);obj.build(verbose=0);qs_tp_this_rho=obj.compute_scalar(*obj.xs(eq))
+        obj = Isodynamicity(             eq=eq, grid=grid_this_rho);obj.build(verbose=0);isodynamicity_this_rho=obj.compute_scalar(*obj.xs(eq))
+        obj = EffectiveRipple(           eq=eq, grid=grid_this_rho_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple_this_rho=obj.compute_scalar(*obj.xs(eq))
+        obj = GammaC(                    eq=eq, grid=grid_this_rho_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c_this_rho=obj.compute_scalar(*obj.xs(eq))
+        obj = MagneticWell(eq=eq, grid=grid_this_rho);obj.build(verbose=0);magnetic_well_this_rho=obj.compute(*obj.xs(eq))[0]
+        obj = MercierStability(eq=eq, grid=grid_this_rho);obj.build(verbose=0);DMerc_this_rho=obj.compute(*obj.xs(eq))[0]
+        print(f"[Rank {rank}] Time taken for DESC local objectives: {time()-start_time:.2f} seconds")
         
-        s_targets_qi = [1/16, 5/16, 9/16]
-        try: qi = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
-        except Exception as e: qi = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
-        if qi == 0.0: qi = np.nan
+        s_targets_qi = [1/16, 5/16, 9/16, 13/16]
+        try: qi_global = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
+        except Exception as e: qi_global = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
+        if qi_global == 0.0: qi_global = np.nan
+
+        try: qi_this_rho = np.sum(QuasiIsodynamicResidual(stel, [rho**2])**2)
+        except Exception as e: qi_this_rho = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
         
-        return qs_tp, effective_ripple, gamma_c, isodynamicity, qi
+        return (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
+                gamma_c_global, gamma_c_this_rho, isodynamicity_global, isodynamicity_this_rho,
+                magnetic_well_this_rho, DMerc_this_rho, DMerc_min, DMerc_max, qi_global, qi_this_rho)
     
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path)
         match = df[df["file"] == eq_filename]
         if not match.empty:
-            # print(f"[Rank {rank}] Found existing data for {eq_filename}. Using it.")
-            qs_tp = match.iloc[0]["qs_triple_product"]
-            effective_ripple = match.iloc[0]["effective_ripple"]
-            gamma_c = match.iloc[0]["gamma_c"]
-            isodynamicity = match.iloc[0]["isodynamicity"]
-            qi = match.iloc[0]["qi"]
-            return qs_tp, effective_ripple, gamma_c, isodynamicity, qi
+            print(f"[Rank {rank}] Found existing DESC and QI data for {eq_filename}. Using it.")
+            qs_tp_global = match.iloc[0]["qs_triple_product_global"]
+            qs_tp_this_rho = match.iloc[0]["qs_triple_product_this_rho"]
+            effective_ripple_global = match.iloc[0]["effective_ripple_global"]
+            effective_ripple_this_rho = match.iloc[0]["effective_ripple_this_rho"]
+            gamma_c_global = match.iloc[0]["gamma_c_global"]
+            gamma_c_this_rho = match.iloc[0]["gamma_c_this_rho"]
+            isodynamicity_global = match.iloc[0]["isodynamicity_global"]
+            isodynamicity_this_rho = match.iloc[0]["isodynamicity_this_rho"]
+            magnetic_well_this_rho = match.iloc[0]["magnetic_well_this_rho"]
+            DMerc_this_rho = match.iloc[0]["DMerc_this_rho"]
+            DMerc_min = match.iloc[0]["DMerc_min"]
+            DMerc_max = match.iloc[0]["DMerc_max"]
+            qi_global = match.iloc[0]["qi_global"]
+            qi_this_rho = match.iloc[0]["qi_this_rho"]
+            return (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
+                    gamma_c_global, gamma_c_this_rho, isodynamicity_global, isodynamicity_this_rho,
+                    magnetic_well_this_rho, DMerc_this_rho, DMerc_min, DMerc_max, qi_global, qi_this_rho)
         else:
             return compute_objectives(eq, rank, stel)
     else:
         return compute_objectives(eq, rank, stel)
 
-def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data):
+def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data, rho):
     eq_path = os.path.join(GX_zenodo_dir, data_folder, eq_relpath)
     eq_filename = os.path.basename(eq_relpath).replace(".h5", "")
     local_wout = os.path.join(wouts_dir, f"wout_{eq_filename}.nc")
-    
-    rho_index = scalar_features.index("rho")
-    print(f"[Rank {rank}] Processing {eq_filename} at rho = {scalar_feature_matrix[i][rho_index]}")
-    print(len(scalar_features))
-    print(len(scalar_feature_matrix[i]))
-    exit()
     
     eq = load(eq_path)
     # eq.change_resolution(M=4, N=4)
@@ -124,16 +150,27 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
         # os.chdir(current_dir)
     stel = Vmec(local_wout, verbose=False)
     
-    qs_tp, effective_ripple, gamma_c, isodynamicity, qi = compute_DESC_QI_objectives(eq_filename, eq, rank, stel)
+    (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
+     gamma_c_global, gamma_c_this_rho, isodynamicity_global, isodynamicity_this_rho,
+     magnetic_well_this_rho, DMerc_this_rho, DMerc_min, DMerc_max,
+     qi_global, qi_this_rho) = compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho)
 
     s_targets_qs = np.linspace(0, 1, 5)
-    qa = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=0).residuals()**2)
-    qh = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=-1).residuals()**2)
-    qp = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=0, helicity_n=1).residuals()**2)
+    qa_global = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=0).residuals()**2)
+    qh_global = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=1, helicity_n=-1).residuals()**2)
+    qp_global = np.sum(QuasisymmetryRatioResidual(stel, s_targets_qs, helicity_m=0, helicity_n=1).residuals()**2)
+
+    qa_this_rho = np.sum(QuasisymmetryRatioResidual(stel, [rho**2], helicity_m=1, helicity_n=0).residuals()**2)
+    qh_this_rho = np.sum(QuasisymmetryRatioResidual(stel, [rho**2], helicity_m=1, helicity_n=-1).residuals()**2)
+    qp_this_rho = np.sum(QuasisymmetryRatioResidual(stel, [rho**2], helicity_m=0, helicity_n=1).residuals()**2)
 
     geom = vmec_compute_geometry(stel, s=1, theta=np.linspace(0, 2*np.pi, 50), phi=np.linspace(0, 2*np.pi, 150))
-    L_grad_B_max = np.max(geom.L_grad_B)
-    L_grad_B_min = np.min(geom.L_grad_B)
+    L_grad_B_max_surface = np.max(geom.L_grad_B)
+    L_grad_B_min_surface = np.min(geom.L_grad_B)
+
+    geom_this_rho = vmec_compute_geometry(stel, s=rho**2, theta=np.linspace(0, 2*np.pi, 50), phi=np.linspace(0, 2*np.pi, 150))
+    L_grad_B_max_this_rho = np.max(geom_this_rho.L_grad_B)
+    L_grad_B_min_this_rho = np.min(geom_this_rho.L_grad_B)
     
     start_time = time()
     SIMPLE_output = os.path.join(wouts_dir, f"simple_output_{eq_filename}.dat")
@@ -146,21 +183,30 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     loss_fraction_1em2 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 1e-2))]
     print(f"[Rank {rank}] Loss fraction at 3e-5 = {loss_fraction_3em5}, at 1e-4 = {loss_fraction_1em4}, at 1e-3 = {loss_fraction_1em3}, at 5e-3 = {loss_fraction_5em3} and 1e-2  = {loss_fraction_1em2}. Calculation took {time()-start_time:.2f} seconds")
 
-    stru = RedlGeomVmec(vmec=stel, surfaces=[0.001,0.5])()
+    stru = RedlGeomVmec(vmec=stel, surfaces=[0.001,rho**2,1])()
+    mirror_ratio_axis     = (stru.Bmax[0]-stru.Bmin[0])/(stru.Bmax[0]+stru.Bmin[0])
+    mirror_ratio_this_rho = (stru.Bmax[1]-stru.Bmin[1])/(stru.Bmax[1]+stru.Bmin[1])
+    mirror_ratio_surface  = (stru.Bmax[2]-stru.Bmin[2])/(stru.Bmax[2]+stru.Bmin[2])
+    trapped_fraction_axis     = stru.f_t[0]
+    trapped_fraction_this_rho = stru.f_t[1]
+    trapped_fraction_surface  = stru.f_t[2]
+    Boozer_G = stru.G[0]
 
-    results = [qa, qh, qp, qi, stru.G[0], stru.f_t[0], stru.f_t[1],
-               qs_tp, effective_ripple, gamma_c, isodynamicity,
+    results = [qa_global, qh_global, qp_global, qi_global, Boozer_G, trapped_fraction_axis, trapped_fraction_surface,
+               qs_tp_global, effective_ripple_global, gamma_c_global, isodynamicity_global,
                loss_fraction_3em5, loss_fraction_1em4, loss_fraction_1em3, loss_fraction_5em3, loss_fraction_1em2,
                stel.iota_axis(), stel.iota_edge(), stel.mean_iota(), stel.mean_shear(),
                stel.vacuum_well(), np.max(MaxElongationPen(stel)),
-               (stru.Bmax[0]-stru.Bmin[0])/(stru.Bmax[0]+stru.Bmin[0]), (stru.Bmax[1]-stru.Bmin[1])/(stru.Bmax[1]+stru.Bmin[1]), #MirrorRatioPen(stel),
-               np.min(stel.wout.DMerc[4:]), np.max(stel.wout.DMerc[4:]), stel.wout.Aminor_p, stel.wout.Rmajor_p,
-               stel.volume(), stel.wout.betatotal, stel.wout.betaxis, stel.wout.volavgB, stel.wout.phi[-1], FSA_grad_xs[i]]
+               mirror_ratio_axis, mirror_ratio_surface,
+               DMerc_min, DMerc_max, stel.wout.Aminor_p, stel.wout.Rmajor_p,
+               stel.volume(), stel.wout.betatotal, stel.wout.betaxis, stel.wout.volavgB, stel.wout.phi[-1], FSA_grad_xs[i],
+               qa_this_rho, qh_this_rho, qp_this_rho, qi_this_rho,
+               qs_tp_this_rho, effective_ripple_this_rho, gamma_c_this_rho, isodynamicity_this_rho,
+               mirror_ratio_this_rho, trapped_fraction_this_rho, magnetic_well_this_rho, DMerc_this_rho,
+               L_grad_B_max_surface, L_grad_B_min_surface, L_grad_B_max_this_rho, L_grad_B_min_this_rho]
 
     for key in fixed_data: results.append(fixed_data[key][i])
     for key in varied_data: results.append(varied_data[key][i])
-
-    results += [L_grad_B_max, L_grad_B_min]
 
     surf = stel.boundary
     surf.change_resolution(mpol=4, ntor=4) # Force every surface to have the same resolution
@@ -171,15 +217,18 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     results += list(scalar_feature_matrix[i])
 
     all_columns = (
-        ['qa', 'qh', 'qp', 'qi', 'Boozer_G', 'trapped_fraction_axis', 'trapped_fraction_s0.5',
-         'qs_triple_product', 'effective_ripple', 'gamma_c', 'isodynamicity',
+        ['qa_global', 'qh_global', 'qp_global', 'qi_global', 'Boozer_G', 'trapped_fraction_axis', 'trapped_fraction_surface',
+         'qs_triple_product_global', 'effective_ripple_global', 'gamma_c_global', 'isodynamicity_global',
          'loss_fraction_3e-5s', 'loss_fraction_1e-4s', 'loss_fraction_1e-3s', 'loss_fraction_5e-3s', 'loss_fraction_1e-2s',
-         'iota_axis', 'iota_edge', 'mean_iota', 'mean_shear', 'well', 'max_elongation',
-         'mirror_ratio_axis', 'mirror_ratio_s0.5', 'Dmerc_min', 'Dmerc_max', 'Aminor', 'Rmajor', 'volume', 'betatotal', 'betaxis',
-         'volavgB', 'phiedge', 'FSA_grad_xs'] +
+         'iota_axis', 'iota_edge', 'mean_iota', 'mean_shear', 'magnetic_well_global', 'max_elongation',
+         'mirror_ratio_axis', 'mirror_ratio_surface', 'DMerc_min', 'DMerc_max', 'Aminor', 'Rmajor', 'volume', 'betatotal', 'betaxis',
+         'volavgB', 'phiedge', 'FSA_grad_xs',
+         'qa_this_rho', 'qh_this_rho', 'qp_this_rho', 'qi_this_rho',
+         'qs_triple_product_this_rho', 'effective_ripple_this_rho', 'gamma_c_this_rho', 'isodynamicity_this_rho',
+         'mirror_ratio_this_rho', 'trapped_fraction_this_rho', 'magnetic_well_this_rho', 'DMerc_this_rho',
+         'L_grad_B_max_surface', 'L_grad_B_min_surface','L_grad_B_max_this_rho', 'L_grad_B_min_this_rho'] +
         [f"fixed_grad_{k}" for k in fixed_data] +
         [f"varied_grad_{k}" for k in varied_data] +
-        ['L_grad_B_max', 'L_grad_B_min'] +
         mode_names +
         [f"am_pressure_{j}" for j in range(len(stel.wout.am[:4]))] +
         scalar_features)
@@ -227,6 +276,7 @@ def main():
     if rank==0: memory_report("Start")
 
     eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data = load_static_data()
+    rho_index = scalar_features.index("rho")
 
     # === Round-robin distribution of all eq_classes across ranks ===
     num_files = len(eq_classes)
@@ -245,8 +295,9 @@ def main():
     for i in iterator:
         eq_relpath = eq_classes[i].decode() if isinstance(eq_classes[i], bytes) else eq_classes[i]
         try:
-            memory_report(f"#{stel_ind+1}/{len(my_indices)}:{i+1}: {eq_relpath[12:]}")
-            df_row = process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data)
+            rho = scalar_feature_matrix[i][rho_index] # sqrt(s)
+            memory_report(f"#{stel_ind+1}/{len(my_indices)}:{i+1}: {eq_relpath[12:]} and rho = {rho}")
+            df_row = process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data, rho)
             if not os.path.exists(csv_path):
                 df_row.to_csv(csv_path, mode='w', header=True, index=False)
             else:
