@@ -98,6 +98,12 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     eq_filename = os.path.basename(eq_relpath).replace(".h5", "")
     local_wout = os.path.join(wouts_dir, f"wout_{eq_filename}.nc")
     
+    rho_index = scalar_features.index("rho")
+    print(f"[Rank {rank}] Processing {eq_filename} at rho = {scalar_feature_matrix[i][rho_index]}")
+    print(len(scalar_features))
+    print(len(scalar_feature_matrix[i]))
+    exit()
+    
     eq = load(eq_path)
     # eq.change_resolution(M=4, N=4)
     # eq.surface = eq.get_surface_at(rho=1.0)
