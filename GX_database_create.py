@@ -292,7 +292,7 @@ def main():
     my_indices = [i for i in range(rank * files_per_rank, (rank + 1) * files_per_rank)]
     # If the division isn't perfect, last rank gets the remaining files
     if rank == size - 1: my_indices.extend(range(size * files_per_rank, num_files))
-    # random.shuffle(my_indices)
+    random.shuffle(my_indices)
 
     # === Main loop for processing ===
     stel_ind = 0
