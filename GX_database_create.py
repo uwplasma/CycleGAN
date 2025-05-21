@@ -66,7 +66,7 @@ def load_static_data():
 def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
     def compute_objectives(eq, rank, stel):
         start_time = time()
-        print(f"[Rank {rank}] Computing DESC and QI global objectives for {eq_filename}...")
+        print(f"[Rank {rank}] Computing DESC global objectives for {eq_filename}...")
         grid_global           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, L=eq.L_grid, axis=False)
         grid_global_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  L=eq.L_grid, axis=False)
         obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_global);obj.build(verbose=0);qs_tp_global=obj.compute_scalar(*obj.xs(eq))
@@ -90,13 +90,11 @@ def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
         print(f"[Rank {rank}] Time taken for DESC local objectives: {time()-start_time:.2f} seconds")
         
         s_targets_qi = [1/16, 5/16, 9/16, 13/16]
-        start_time = time()
-        try: qi_global = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2);print(f"[Rank {rank}] Time taken for qi global objectives: {time()-start_time:.2f} seconds")
+        try: qi_global = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
         except Exception as e: qi_global = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
         if qi_global == 0.0: qi_global = np.nan
 
-        start_time = time()
-        try: qi_this_rho = np.sum(QuasiIsodynamicResidual(stel, [rho**2])**2);print(f"[Rank {rank}] Time taken for qi local objectives: {time()-start_time:.2f} seconds")
+        try: qi_this_rho = np.sum(QuasiIsodynamicResidual(stel, [rho**2])**2)
         except Exception as e: qi_this_rho = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
         
         return (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
@@ -142,6 +140,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     # Only save the equilibrium if it hasn't been processed yet
     if not os.path.exists(local_wout):
         start_time = time()
+        print(f"[Rank {rank}] Saving VMEC output for {eq_filename}...")
         VMECIO.save(eq, local_wout, verbose=0)
         print(f"[Rank {rank}] Saved equilibrium to {local_wout} in {time()-start_time:.2f} seconds")
         # current_dir = os.getcwd()
@@ -181,6 +180,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     
     start_time = time()
     SIMPLE_output = os.path.join(wouts_dir, f"simple_output_{eq_filename}.dat")
+    print(f"[Rank {rank}] Running SIMPLE for {eq_filename}...")
     loss_fraction, loss_fraction_times = calculate_loss_fraction_SIMPLE(local_wout=local_wout, stel=stel, SIMPLE_output=SIMPLE_output,
                                                     SIMPLE_executable=SIMPLE_executable, SIMPLE_input=SIMPLE_input, rank=rank)
     loss_fraction_3em5 = loss_fraction[np.argmin(np.abs(loss_fraction_times - 3e-5))]
@@ -292,7 +292,7 @@ def main():
     my_indices = [i for i in range(rank * files_per_rank, (rank + 1) * files_per_rank)]
     # If the division isn't perfect, last rank gets the remaining files
     if rank == size - 1: my_indices.extend(range(size * files_per_rank, num_files))
-    random.shuffle(my_indices)
+    # random.shuffle(my_indices)
 
     # === Main loop for processing ===
     stel_ind = 0
