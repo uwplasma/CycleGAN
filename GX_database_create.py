@@ -66,6 +66,7 @@ def load_static_data():
 def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
     def compute_objectives(eq, rank, stel):
         start_time = time()
+        print(f"[Rank {rank}] Computing DESC and QI global objectives for {eq_filename}...")
         grid_global           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, L=eq.L_grid, axis=False)
         grid_global_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  L=eq.L_grid, axis=False)
         obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_global);obj.build(verbose=0);qs_tp_global=obj.compute_scalar(*obj.xs(eq))
@@ -76,6 +77,8 @@ def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
         DMerc_min = np.min(mercier_stability_global);DMerc_max = np.max(mercier_stability_global)
         print(f"[Rank {rank}] Time taken for DESC global objectives: {time()-start_time:.2f} seconds")
 
+        start_time = time()
+        print(f"[Rank {rank}] Computing DESC local objectives for {eq_filename}...")
         grid_this_rho           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, rho=rho)
         grid_this_rho_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  rho=rho)
         obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_this_rho);obj.build(verbose=0);qs_tp_this_rho=obj.compute_scalar(*obj.xs(eq))
@@ -87,11 +90,13 @@ def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
         print(f"[Rank {rank}] Time taken for DESC local objectives: {time()-start_time:.2f} seconds")
         
         s_targets_qi = [1/16, 5/16, 9/16, 13/16]
-        try: qi_global = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
+        start_time = time()
+        try: qi_global = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2);print(f"[Rank {rank}] Time taken for qi global objectives: {time()-start_time:.2f} seconds")
         except Exception as e: qi_global = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
         if qi_global == 0.0: qi_global = np.nan
 
-        try: qi_this_rho = np.sum(QuasiIsodynamicResidual(stel, [rho**2])**2)
+        start_time = time()
+        try: qi_this_rho = np.sum(QuasiIsodynamicResidual(stel, [rho**2])**2);print(f"[Rank {rank}] Time taken for qi local objectives: {time()-start_time:.2f} seconds")
         except Exception as e: qi_this_rho = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
         
         return (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
@@ -136,7 +141,9 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     
     # Only save the equilibrium if it hasn't been processed yet
     if not os.path.exists(local_wout):
+        start_time = time()
         VMECIO.save(eq, local_wout, verbose=0)
+        print(f"[Rank {rank}] Saved equilibrium to {local_wout} in {time()-start_time:.2f} seconds")
         # current_dir = os.getcwd()
         # os.chdir(wouts_dir)
         # local_vmec_input = local_wout.replace(".nc", "").replace("wout_", "input.")
