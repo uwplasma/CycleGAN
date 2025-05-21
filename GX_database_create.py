@@ -63,74 +63,70 @@ def load_static_data():
         varied_data = {key: f[f"/varied_gradient_simulations/{key}"][()] for key in fixed_keys}
     return eq_classes, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data
 
-def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
-    def compute_objectives(eq, rank, stel):
-        start_time = time()
-        print(f"[Rank {rank}] Computing DESC global objectives for {eq_filename}...")
-        grid_global           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, L=eq.L_grid, axis=False)
-        grid_global_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  L=eq.L_grid, axis=False)
-        obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_global);obj.build(verbose=0);qs_tp_global=obj.compute_scalar(*obj.xs(eq))
-        obj = Isodynamicity(             eq=eq, grid=grid_global);obj.build(verbose=0);isodynamicity_global=obj.compute_scalar(*obj.xs(eq))
-        obj = EffectiveRipple(           eq=eq, grid=grid_global_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple_global=obj.compute_scalar(*obj.xs(eq))
-        obj = GammaC(                    eq=eq, grid=grid_global_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c_global=obj.compute_scalar(*obj.xs(eq))
-        obj = MercierStability(eq=eq, grid=grid_global);obj.build(verbose=0);mercier_stability_global=obj.compute(*obj.xs(eq))
-        DMerc_min = np.min(mercier_stability_global);DMerc_max = np.max(mercier_stability_global)
-        print(f"[Rank {rank}] Time taken for DESC global objectives: {time()-start_time:.2f} seconds")
 
-        start_time = time()
-        print(f"[Rank {rank}] Computing DESC local objectives for {eq_filename}...")
-        grid_this_rho           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, rho=rho)
-        grid_this_rho_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  rho=rho)
-        obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_this_rho);obj.build(verbose=0);qs_tp_this_rho=obj.compute_scalar(*obj.xs(eq))
-        obj = Isodynamicity(             eq=eq, grid=grid_this_rho);obj.build(verbose=0);isodynamicity_this_rho=obj.compute_scalar(*obj.xs(eq))
-        obj = EffectiveRipple(           eq=eq, grid=grid_this_rho_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple_this_rho=obj.compute_scalar(*obj.xs(eq))
-        obj = GammaC(                    eq=eq, grid=grid_this_rho_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c_this_rho=obj.compute_scalar(*obj.xs(eq))
-        obj = MagneticWell(eq=eq, grid=grid_this_rho);obj.build(verbose=0);magnetic_well_this_rho=obj.compute(*obj.xs(eq))[0]
-        obj = MercierStability(eq=eq, grid=grid_this_rho);obj.build(verbose=0);DMerc_this_rho=obj.compute(*obj.xs(eq))[0]
-        print(f"[Rank {rank}] Time taken for DESC local objectives: {time()-start_time:.2f} seconds")
-        
-        s_targets_qi = [1/16, 5/16, 9/16, 13/16]
-        try: qi_global = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
-        except Exception as e: qi_global = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
-        if qi_global == 0.0: qi_global = np.nan
-
-        try: qi_this_rho = np.sum(QuasiIsodynamicResidual(stel, [rho**2])**2)
-        except Exception as e: qi_this_rho = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
-        
-        return (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
-                gamma_c_global, gamma_c_this_rho, isodynamicity_global, isodynamicity_this_rho,
-                magnetic_well_this_rho, DMerc_this_rho, DMerc_min, DMerc_max, qi_global, qi_this_rho)
+def compute_DESC_QI_objectives_global_if_not_found(eq_filename, eq, rank, stel, s_targets_qi = [1/16, 5/16, 9/16, 13/16]):
+    start_time = time()
+    print(f"[Rank {rank}] Computing DESC global objectives for {eq_filename}...")
+    grid_global           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, L=eq.L_grid, axis=False)
+    grid_global_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  L=eq.L_grid, axis=False)
+    obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_global);obj.build(verbose=0);qs_tp_global=obj.compute_scalar(*obj.xs(eq))
+    obj = Isodynamicity(             eq=eq, grid=grid_global);obj.build(verbose=0);isodynamicity_global=obj.compute_scalar(*obj.xs(eq))
+    obj = EffectiveRipple(           eq=eq, grid=grid_global_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple_global=obj.compute_scalar(*obj.xs(eq))
+    obj = GammaC(                    eq=eq, grid=grid_global_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c_global=obj.compute_scalar(*obj.xs(eq))
+    obj = MercierStability(eq=eq, grid=grid_global);obj.build(verbose=0);mercier_stability_global=obj.compute(*obj.xs(eq))
+    DMerc_min = np.min(mercier_stability_global);DMerc_max = np.max(mercier_stability_global)
+    print(f"[Rank {rank}] Time taken for DESC global objectives: {time()-start_time:.2f} seconds")
     
+    try: qi_global = np.sum(QuasiIsodynamicResidual(stel, s_targets_qi)**2)
+    except Exception as e: qi_global = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
+    if qi_global == 0.0: qi_global = np.nan
+    
+    return (qs_tp_global, effective_ripple_global, gamma_c_global, isodynamicity_global, DMerc_min, DMerc_max, qi_global)
+    
+def compute_DESC_QI_objectives_global(eq_filename, eq, rank, stel):
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path)
         match = df[df["file"] == eq_filename]
         if not match.empty:
-            print(f"[Rank {rank}] Found existing DESC and QI data for {eq_filename}. Using it.")
+            print(f"[Rank {rank}] Found existing DESC and QI global data for {eq_filename}. Using it.")
             qs_tp_global = match.iloc[0]["qs_triple_product_global"]
-            qs_tp_this_rho = match.iloc[0]["qs_triple_product_this_rho"]
             effective_ripple_global = match.iloc[0]["effective_ripple_global"]
-            effective_ripple_this_rho = match.iloc[0]["effective_ripple_this_rho"]
             gamma_c_global = match.iloc[0]["gamma_c_global"]
-            gamma_c_this_rho = match.iloc[0]["gamma_c_this_rho"]
             isodynamicity_global = match.iloc[0]["isodynamicity_global"]
-            isodynamicity_this_rho = match.iloc[0]["isodynamicity_this_rho"]
-            magnetic_well_this_rho = match.iloc[0]["magnetic_well_this_rho"]
-            DMerc_this_rho = match.iloc[0]["DMerc_this_rho"]
             DMerc_min = match.iloc[0]["DMerc_min"]
             DMerc_max = match.iloc[0]["DMerc_max"]
             qi_global = match.iloc[0]["qi_global"]
-            qi_this_rho = match.iloc[0]["qi_this_rho"]
-            return (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
-                    gamma_c_global, gamma_c_this_rho, isodynamicity_global, isodynamicity_this_rho,
-                    magnetic_well_this_rho, DMerc_this_rho, DMerc_min, DMerc_max, qi_global, qi_this_rho)
+            return (qs_tp_global, effective_ripple_global, gamma_c_global, isodynamicity_global, DMerc_min, DMerc_max, qi_global)
         else:
-            return compute_objectives(eq, rank, stel)
+            return compute_DESC_QI_objectives_global_if_not_found(eq_filename, eq, rank, stel)
     else:
-        return compute_objectives(eq, rank, stel)
+        return compute_DESC_QI_objectives_global_if_not_found(eq_filename, eq, rank, stel)
 
-def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data, rho):
+def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
+    (qs_tp_global, effective_ripple_global, gamma_c_global, isodynamicity_global,
+     DMerc_min, DMerc_max, qi_global) = compute_DESC_QI_objectives_global(eq_filename, eq, rank, stel)
+
+    start_time = time()
+    print(f"[Rank {rank}] Computing DESC local objectives for {eq_filename}...")
+    grid_this_rho           = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=eq.sym, rho=rho)
+    grid_this_rho_sym_False = LinearGrid(M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False,  rho=rho)
+    obj = QuasisymmetryTripleProduct(eq=eq, grid=grid_this_rho);obj.build(verbose=0);qs_tp_this_rho=obj.compute_scalar(*obj.xs(eq))
+    obj = Isodynamicity(             eq=eq, grid=grid_this_rho);obj.build(verbose=0);isodynamicity_this_rho=obj.compute_scalar(*obj.xs(eq))
+    obj = EffectiveRipple(           eq=eq, grid=grid_this_rho_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);effective_ripple_this_rho=obj.compute_scalar(*obj.xs(eq))
+    obj = GammaC(                    eq=eq, grid=grid_this_rho_sym_False, jac_chunk_size=1, num_quad=16, num_well=200, num_transit=20, num_pitch=31);obj.build(verbose=0);gamma_c_this_rho=obj.compute_scalar(*obj.xs(eq))
+    obj = MagneticWell(eq=eq, grid=grid_this_rho);obj.build(verbose=0);magnetic_well_this_rho=obj.compute(*obj.xs(eq))[0]
+    obj = MercierStability(eq=eq, grid=grid_this_rho);obj.build(verbose=0);DMerc_this_rho=obj.compute(*obj.xs(eq))[0]
+    print(f"[Rank {rank}] Time taken for DESC local objectives: {time()-start_time:.2f} seconds")
+
+    try: qi_this_rho = np.sum(QuasiIsodynamicResidual(stel, [rho**2])**2)
+    except Exception as e: qi_this_rho = np.nan;print(f"[Rank {rank}] Error calculating qi at eq_filename {eq_filename}: {e}") 
+    
+    return (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
+            gamma_c_global, gamma_c_this_rho, isodynamicity_global, isodynamicity_this_rho,
+            magnetic_well_this_rho, DMerc_this_rho, DMerc_min, DMerc_max, qi_global, qi_this_rho)
+    
+def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data, rho, eq_filename):
     eq_path = os.path.join(GX_zenodo_dir, data_folder, eq_relpath)
-    eq_filename = os.path.basename(eq_relpath).replace(".h5", "")
     local_wout = os.path.join(wouts_dir, f"wout_{eq_filename}.nc")
     
     eq = load(eq_path)
@@ -292,7 +288,7 @@ def main():
     my_indices = [i for i in range(rank * files_per_rank, (rank + 1) * files_per_rank)]
     # If the division isn't perfect, last rank gets the remaining files
     if rank == size - 1: my_indices.extend(range(size * files_per_rank, num_files))
-    random.shuffle(my_indices)
+    # random.shuffle(my_indices)
 
     # === Main loop for processing ===
     stel_ind = 0
@@ -303,8 +299,16 @@ def main():
         eq_relpath = eq_classes[i].decode() if isinstance(eq_classes[i], bytes) else eq_classes[i]
         try:
             rho = scalar_feature_matrix[i][rho_index] # sqrt(s)
+            eq_filename = os.path.basename(eq_relpath).replace(".h5", "")
+            # Check if the equilibrium has already been processed
+            if os.path.exists(csv_path):
+                df = pd.read_csv(csv_path)
+                if "file" in df.columns and "rho" in df.columns:
+                    if not df[(df["file"] == eq_filename) & (np.isclose(df["rho"], rho, atol=1e-6))].empty:
+                        print(f"[Rank {rank}] Skipping {eq_filename} at rho={rho}: already exists in CSV")
+                        continue
             memory_report(f"#{stel_ind+1}/{len(my_indices)}:{i+1}: {eq_relpath[12:]} and rho = {rho}")
-            df_row = process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data, rho)
+            df_row = process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data, rho, eq_filename)
             if not os.path.exists(csv_path):
                 df_row.to_csv(csv_path, mode='w', header=True, index=False)
             else:
