@@ -13,7 +13,7 @@ from mpi4py import MPI
 from desc.io import load
 from tqdm.auto import tqdm
 from desc.vmec import VMECIO
-from desc.grid import LinearGrid
+from desc.grid import LinearGrid, Grid
 from extra_objectives import calculate_loss_fraction_SIMPLE
 from simsopt.mhd import RedlGeomVmec
 from simsopt.mhd import Vmec, vmec_compute_geometry, QuasisymmetryRatioResidual
@@ -21,6 +21,7 @@ from qi_functions import MaxElongationPen, QuasiIsodynamicResidual
 from desc.objectives import (QuasisymmetryTripleProduct, EffectiveRipple, GammaC,
                              Isodynamicity, MagneticWell, MercierStability)
 import shutil
+from scipy.signal import find_peaks
 
 # === Paths ===
 HOME_DIR = os.path.join(os.environ.get("HOME", os.path.expanduser("~")), "local")
@@ -124,6 +125,34 @@ def compute_DESC_QI_objectives(eq_filename, eq, rank, stel, rho):
     return (qs_tp_global, qs_tp_this_rho, effective_ripple_global, effective_ripple_this_rho,
             gamma_c_global, gamma_c_this_rho, isodynamicity_global, isodynamicity_this_rho,
             magnetic_well_this_rho, DMerc_this_rho, DMerc_min, DMerc_max, qi_global, qi_this_rho)
+
+def compute_DESC_modB_objectives(eq, rank, rho, nalpha=7, nzeta=150):
+
+    start_time = time()
+    grid = Grid.create_meshgrid([rho, np.linspace(0, 2*np.pi, nalpha), np.linspace(0, 2*np.pi/eq.compute("iota")["iota"][0], nzeta)], coordinates="raz")
+    modB_temp = eq.compute("|B|", grid=grid)["|B|"]
+    modB = grid.meshgrid_reshape(modB_temp, "raz")[0]
+    
+    all_peaks_max = [find_peaks( modB[i, :])[0] for i in range(nalpha)]
+    all_peaks_min = [find_peaks(-modB[i, :])[0] for i in range(nalpha)]
+    stds_max_within_modB_normalized = np.array([np.std(modB[i, peaks])/np.mean(modB[i,:]) for i, peaks in enumerate(all_peaks_max)])
+    stds_min_within_modB_normalized = np.array([np.std(modB[i, peaks])/np.mean(modB[i,:]) for i, peaks in enumerate(all_peaks_min)])
+    stds_max_across_modB_normalized = np.std(np.max(modB,axis=1)/np.mean(modB,axis=1))
+    stds_min_across_modB_normalized = np.std(np.min(modB,axis=1)/np.mean(modB,axis=1))
+    combined_stds_max_modB_normalized = np.mean(stds_max_within_modB_normalized) + stds_max_across_modB_normalized
+    combined_stds_min_modB_normalized = np.mean(stds_min_within_modB_normalized) + stds_min_across_modB_normalized
+    # print(f"[Rank {rank}] Time taken for modB calculation: {time()-start_time:.2f} seconds with rho = {rho}, max_std: {combined_stds_max_modB_normalized:.3f} and min_std: {combined_stds_min_modB_normalized:.3f}")
+    
+    # import matplotlib.pyplot as plt
+    # plt.figure(figsize=(10, 6))
+    # for i in range(nalpha):
+    #     plt.plot(modB[i], label=rf"$\alpha$={i*2*np.pi/nalpha:.2f})")
+    #     plt.plot(all_peaks_max[i], modB[i, all_peaks_max[i]], "ro", markersize=4)
+    #     plt.plot(all_peaks_min[i], modB[i, all_peaks_min[i]], "go", markersize=4)
+    # plt.title("Local maxima (red) and minima (green) of |B| for all alpha")
+    # plt.show()
+    
+    return combined_stds_max_modB_normalized, combined_stds_min_modB_normalized
     
 def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data, rho, eq_filename):
     eq_path = os.path.join(GX_zenodo_dir, data_folder, eq_relpath)
@@ -174,6 +203,8 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     L_grad_B_max_this_rho = np.max(geom_this_rho.L_grad_B)
     L_grad_B_min_this_rho = np.min(geom_this_rho.L_grad_B)
     
+    B_max_std_this_rho, B_min_std_this_rho = compute_DESC_modB_objectives(eq, rank, rho)
+    
     start_time = time()
     SIMPLE_output = os.path.join(wouts_dir, f"simple_output_{eq_filename}.dat")
     print(f"[Rank {rank}] Running SIMPLE for {eq_filename}...")
@@ -206,7 +237,8 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
                qa_this_rho, qh_this_rho, qp_this_rho, qi_this_rho,
                qs_tp_this_rho, effective_ripple_this_rho, gamma_c_this_rho, isodynamicity_this_rho,
                mirror_ratio_this_rho, trapped_fraction_this_rho, magnetic_well_this_rho, DMerc_this_rho,
-               L_grad_B_max_surface, L_grad_B_min_surface, L_grad_B_max_this_rho, L_grad_B_min_this_rho]
+               L_grad_B_max_surface, L_grad_B_min_surface, L_grad_B_max_this_rho, L_grad_B_min_this_rho,
+               B_max_std_this_rho, B_min_std_this_rho]
 
     for key in fixed_data: results.append(fixed_data[key][i])
     for key in varied_data: results.append(varied_data[key][i])
@@ -229,7 +261,8 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
          'qa_this_rho', 'qh_this_rho', 'qp_this_rho', 'qi_this_rho',
          'qs_triple_product_this_rho', 'effective_ripple_this_rho', 'gamma_c_this_rho', 'isodynamicity_this_rho',
          'mirror_ratio_this_rho', 'trapped_fraction_this_rho', 'magnetic_well_this_rho', 'DMerc_this_rho',
-         'L_grad_B_max_surface', 'L_grad_B_min_surface','L_grad_B_max_this_rho', 'L_grad_B_min_this_rho'] +
+         'L_grad_B_max_surface', 'L_grad_B_min_surface','L_grad_B_max_this_rho', 'L_grad_B_min_this_rho',
+         'B_max_std_this_rho', 'B_min_std_this_rho'] +
         [f"fixed_grad_{k}" for k in fixed_data] +
         [f"varied_grad_{k}" for k in varied_data] +
         mode_names +
