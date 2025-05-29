@@ -13,6 +13,7 @@ from mpi4py import MPI
 from desc.io import load
 from tqdm.auto import tqdm
 from desc.vmec import VMECIO
+from desc.integrals import Bounce2D
 from desc.grid import LinearGrid, Grid
 from extra_objectives import calculate_loss_fraction_SIMPLE
 from simsopt.mhd import RedlGeomVmec
@@ -153,6 +154,20 @@ def compute_DESC_modB_objectives(eq, rank, rho, nalpha=7, nzeta=150):
     # plt.show()
     
     return combined_stds_max_modB_normalized, combined_stds_min_modB_normalized
+
+def compute_DESC_J_objectives(eq_filename, eq, rank, rho, nalpha=7, num_pitch = 31):
+    start_time = time()
+    print(f"[Rank {rank}] Computing DESC J objectives for {eq_filename}...")
+    theta = Bounce2D.compute_theta(eq, X=32, Y=64, rho=rho)
+    grid = LinearGrid(rho=rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP, sym=False)
+    data0 = eq.compute(["J_s", "J_alpha", "<v_dot_grads>"], grid=grid, theta=theta, Y_B=64, num_transit=3, num_quad=32, num_pitch=num_pitch, alpha=np.linspace(0, 2*np.pi, nalpha))
+    dJ_ds = grid.compress(data0["J_s"])[0]
+    dJ_dalpha = grid.compress(data0["<v_dot_grads>"])[0]
+    dJ_dalpha_DESC_metric_this_rho = grid.compress(data0["J_alpha"])[0]
+    dJ_ds_sum_this_rho = np.sum(dJ_ds**2)
+    dJ_dalpha_sum_this_rho = np.sum(dJ_dalpha**2)
+    print(f"[Rank {rank}] Time taken for DESC J objectives: {time()-start_time:.2f} seconds")
+    return dJ_ds_sum_this_rho, dJ_dalpha_sum_this_rho, dJ_dalpha_DESC_metric_this_rho
     
 def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, FSA_grad_xs, fixed_data, varied_data, rho, eq_filename):
     eq_path = os.path.join(GX_zenodo_dir, data_folder, eq_relpath)
@@ -205,6 +220,8 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
     
     B_max_std_this_rho, B_min_std_this_rho = compute_DESC_modB_objectives(eq, rank, rho)
     
+    dJ_ds_sum_this_rho, dJ_dalpha_sum_this_rho, dJ_dalpha_DESC_metric_this_rho = compute_DESC_J_objectives(eq_filename, eq, rank, rho)
+    
     start_time = time()
     SIMPLE_output = os.path.join(wouts_dir, f"simple_output_{eq_filename}.dat")
     print(f"[Rank {rank}] Running SIMPLE for {eq_filename}...")
@@ -236,6 +253,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
                stel.volume(), stel.wout.betatotal, stel.wout.betaxis, stel.wout.volavgB, stel.wout.phi[-1], FSA_grad_xs[i],
                qa_this_rho, qh_this_rho, qp_this_rho, qi_this_rho,
                qs_tp_this_rho, effective_ripple_this_rho, gamma_c_this_rho, isodynamicity_this_rho,
+               dJ_ds_sum_this_rho, dJ_dalpha_sum_this_rho, dJ_dalpha_DESC_metric_this_rho,
                mirror_ratio_this_rho, trapped_fraction_this_rho, magnetic_well_this_rho, DMerc_this_rho,
                L_grad_B_max_surface, L_grad_B_min_surface, L_grad_B_max_this_rho, L_grad_B_min_this_rho,
                B_max_std_this_rho, B_min_std_this_rho]
@@ -260,6 +278,7 @@ def process_equilibrium(i, eq_relpath, scalar_features, scalar_feature_matrix, F
          'volavgB', 'phiedge', 'FSA_grad_xs',
          'qa_this_rho', 'qh_this_rho', 'qp_this_rho', 'qi_this_rho',
          'qs_triple_product_this_rho', 'effective_ripple_this_rho', 'gamma_c_this_rho', 'isodynamicity_this_rho',
+         'dJ_ds_sum_this_rho', 'dJ_dalpha_sum_this_rho', 'dJ_dalpha_DESC_metric_this_rho',
          'mirror_ratio_this_rho', 'trapped_fraction_this_rho', 'magnetic_well_this_rho', 'DMerc_this_rho',
          'L_grad_B_max_surface', 'L_grad_B_min_surface','L_grad_B_max_this_rho', 'L_grad_B_min_this_rho',
          'B_max_std_this_rho', 'B_min_std_this_rho'] +
